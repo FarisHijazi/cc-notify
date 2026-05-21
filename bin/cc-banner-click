@@ -1,0 +1,43 @@
+#!/usr/bin/env bash
+# Hotkey handler: "click the most recent Claude Code notification banner".
+# Instead of trying to programmatically click the macOS banner (fragile UI
+# scripting), we read the most recent route file and invoke cc-focus.sh
+# directly. Result: same effect as clicking, but works even if the banner
+# has auto-dismissed.
+
+# Debug ping so we can verify Karabiner is actually invoking us.
+printf '[%s] cc-banner-click invoked\n' "$(date +%T)" >> /tmp/cc-banner-click.log
+
+latest=$(ls -t /tmp/cc-notify/*.route 2>/dev/null | head -1)
+if [ -z "$latest" ]; then
+  osascript -e 'display notification "No recent Claude Code notification to focus." with title "cc-notify"' 2>/dev/null
+  exit 1
+fi
+
+session_id=$(basename "$latest" .route)
+
+# Try the plugin-installed focus script first; fall back to manual install path.
+focus_rc=2
+for candidate in \
+  ~/.claude/plugins/cache/farishijazi-plugins/cc-notify/*/hooks/cc-focus.sh \
+  ~/projects/claude-plugins/plugins/cc-notify/hooks/cc-focus.sh \
+  ~/.claude/hooks/cc-focus.sh; do
+  if [ -x "$candidate" ]; then
+    bash "$candidate" "$session_id"
+    focus_rc=$?
+    break
+  fi
+done
+
+# Dismiss the banner only if focus actually succeeded.
+if [ "$focus_rc" = "0" ]; then
+  # alerter --remove takes the group id; cc-notify groups as "cc-<session_id>".
+  alerter_bin=$(command -v alerter 2>/dev/null || echo /opt/homebrew/bin/alerter)
+  if [ -x "$alerter_bin" ]; then
+    "$alerter_bin" --remove "cc-$session_id" >/dev/null 2>&1 &
+  fi
+  # Belt-and-suspenders: kill the alerter process that's blocking on this group.
+  pkill -f "alerter.*cc-$session_id" 2>/dev/null
+fi
+
+exit "$focus_rc"
