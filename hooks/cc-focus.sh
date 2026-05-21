@@ -47,7 +47,6 @@ tmux_jump() {
   [ -n "$tmux_pane" ]   && tmux select-pane   -t "$tmux_session:$tmux_window.$tmux_pane" 2>/dev/null
 }
 
-case "$term" in
 # Track whether ANY focus action actually fired. The hotkey wrapper uses the
 # exit code to decide whether to dismiss the banner.
 focused=""
