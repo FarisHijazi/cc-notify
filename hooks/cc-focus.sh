@@ -10,6 +10,19 @@ route_file="/tmp/cc-notify/${session_id}.route"
 # shellcheck disable=SC1090
 . "$route_file"
 
+# Focus the right window via Aerospace by GUI process PID. This bypasses
+# AppleScript multi-instance issues — macOS can host multiple Terminal.app
+# processes (e.g. one per Aerospace workspace), and `tell application "Terminal"`
+# only sees windows of ONE process. Aerospace sees every window regardless of
+# which process owns it, and `focus --window-id` also switches workspace.
+aerospace_focused=""
+if [ -n "$gui_pid" ] && command -v aerospace >/dev/null 2>&1; then
+  wid=$(aerospace list-windows --monitor all --pid "$gui_pid" --format '%{window-id}' 2>/dev/null | head -1)
+  if [ -n "$wid" ]; then
+    aerospace focus --window-id "$wid" 2>/dev/null && aerospace_focused=1
+  fi
+fi
+
 # Split tmux_target ("session:window.pane") into parts for explicit selection.
 tmux_session="" tmux_window="" tmux_pane=""
 if [ -n "$tmux_target" ]; then
@@ -36,9 +49,9 @@ tmux_jump() {
 
 case "$term" in
   Apple_Terminal)
-    # Find the Terminal window+tab whose tty matches and bring it frontmost.
-    # Terminal.app's scripting dictionary exposes `tty` on tabs.
-    if [ -n "$client_tty" ]; then
+    # Aerospace-by-pid was tried above; if it didn't work, fall back to
+    # AppleScript-by-tty (works when there's only one Terminal.app process).
+    if [ -z "$aerospace_focused" ] && [ -n "$client_tty" ]; then
       osascript <<OSA >/dev/null 2>&1
 tell application "Terminal"
   activate
@@ -57,17 +70,8 @@ tell application "Terminal"
   end repeat
 end tell
 OSA
-    else
+    elif [ -z "$aerospace_focused" ]; then
       open -a Terminal 2>/dev/null
-    fi
-
-    # Aerospace: switch workspace if the focused window is on a different one.
-    if command -v aerospace >/dev/null 2>&1; then
-      target_ws=$(aerospace list-windows --focused --format '%{workspace}' 2>/dev/null)
-      cur_ws=$(aerospace list-workspaces --focused 2>/dev/null)
-      if [ -n "$target_ws" ] && [ "$target_ws" != "$cur_ws" ]; then
-        aerospace workspace "$target_ws" 2>/dev/null
-      fi
     fi
 
     sleep 0.1
@@ -90,13 +94,13 @@ OSA
     ;;
 
   iTerm.app)
-    open -a iTerm 2>/dev/null
+    [ -z "$aerospace_focused" ] && open -a iTerm 2>/dev/null
     sleep 0.15
     tmux_jump
     ;;
 
   ghostty)
-    open -a Ghostty 2>/dev/null
+    [ -z "$aerospace_focused" ] && open -a Ghostty 2>/dev/null
     sleep 0.15
     tmux_jump
     ;;
