@@ -102,7 +102,22 @@ cur_ws=$(aerospace list-workspaces --focused)
 
 It's truly native — and not clickable. Apple removed the click-callback path for unsigned scripts in 10.14+. Don't waste time trying to make it work with click handlers. Use `alerter` (or build a tiny Swift app wrapping `UNUserNotificationCenter` if you really can't depend on brew).
 
-## 10. tmux `allow-passthrough on` matters for OSC escape sequences
+## 10. AppleScript sees only ONE Terminal.app process at a time
+
+macOS allows multiple Terminal.app processes to be running simultaneously (common under tiling WMs like Aerospace, which can spawn a separate Terminal.app per workspace). `tell application "Terminal"` only talks to one of them — windows in the others are completely invisible to AppleScript.
+
+**Symptom**: notification click lands on the wrong Terminal window even though tty-match logic seems correct — because the target tab's tty is in a Terminal.app process that AppleScript can't see.
+
+**Fix**: don't rely on AppleScript for window targeting. Walk `ps` from the tmux client tty up to find the GUI app PID, then use Aerospace:
+
+```bash
+wid=$(aerospace list-windows --monitor all --pid "$gui_pid" --format '%{window-id}' | head -1)
+aerospace focus --window-id "$wid"   # also switches workspace if window is on another one
+```
+
+Aerospace sees every window regardless of which process owns it.
+
+## 11. tmux `allow-passthrough on` matters for OSC escape sequences
 
 Not used in cc-notify v1 (the SSH branch just uses `\a` bell), but if you ever want to forward iTerm2-native notifications through tmux from a remote machine, you need this in `~/.tmux.conf`:
 
