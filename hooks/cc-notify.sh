@@ -41,27 +41,43 @@ if [ -n "$TMUX" ] && [ -n "$TMUX_PANE" ]; then
 fi
 
 # Walk ps tree from client_tty up to find the GUI terminal app's PID.
-# Two purposes: (1) recover TERM_PROGRAM when tmux clobbers it to "tmux",
-# (2) save gui_pid so the click handler can ask Aerospace for THAT specific
-# window — handles the case where a user has multiple Terminal.app processes
-# (one per workspace under Aerospace), each of which AppleScript can't all see.
-gui_pid=""
-if [ -n "$client_tty" ]; then
-  tty_short="${client_tty#/dev/}"
-  tty_pid=$(ps -t "$tty_short" -o pid= 2>/dev/null | head -1 | tr -d ' ')
+# Helper: try walking from a single tty. Sets `gui_pid` + `term` if it succeeds.
+_try_walk_tty() {
+  local candidate_tty="$1"
+  local tty_short="${candidate_tty#/dev/}"
+  local pid hops cmd
+  pid=$(ps -t "$tty_short" -o pid= 2>/dev/null | head -1 | tr -d ' ')
   hops=0
-  while [ -n "$tty_pid" ] && [ "$tty_pid" != "1" ] && [ "$hops" -lt 20 ]; do
-    cmd=$(ps -o comm= -p "$tty_pid" 2>/dev/null)
+  while [ -n "$pid" ] && [ "$pid" != "1" ] && [ "$hops" -lt 20 ]; do
+    cmd=$(ps -o comm= -p "$pid" 2>/dev/null)
     case "$cmd" in
-      */Terminal|Terminal)              [ "$term" = "tmux" ] && term="Apple_Terminal"; gui_pid="$tty_pid"; break ;;
-      */iTerm2|iTerm2|*/iTerm|iTerm)    [ "$term" = "tmux" ] && term="iTerm.app";      gui_pid="$tty_pid"; break ;;
-      */Ghostty|Ghostty|*/ghostty|ghostty) [ "$term" = "tmux" ] && term="ghostty";     gui_pid="$tty_pid"; break ;;
-      */Cursor|Cursor)                  [ "$term" = "tmux" ] && term="vscode";         gui_pid="$tty_pid"; break ;;
-      */Code\ Helper*|*/Electron|*/Code|Code) [ "$term" = "tmux" ] && term="vscode";   gui_pid="$tty_pid"; break ;;
+      */Terminal|Terminal)              [ "$term" = "tmux" ] && term="Apple_Terminal"; gui_pid="$pid"; client_tty="$candidate_tty"; return 0 ;;
+      */iTerm2|iTerm2|*/iTerm|iTerm)    [ "$term" = "tmux" ] && term="iTerm.app";      gui_pid="$pid"; client_tty="$candidate_tty"; return 0 ;;
+      */Ghostty|Ghostty|*/ghostty|ghostty) [ "$term" = "tmux" ] && term="ghostty";     gui_pid="$pid"; client_tty="$candidate_tty"; return 0 ;;
+      */Cursor|Cursor)                  [ "$term" = "tmux" ] && term="vscode";         gui_pid="$pid"; client_tty="$candidate_tty"; return 0 ;;
+      */Code\ Helper*|*/Electron|*/Code|Code) [ "$term" = "tmux" ] && term="vscode";   gui_pid="$pid"; client_tty="$candidate_tty"; return 0 ;;
     esac
-    tty_pid=$(ps -o ppid= -p "$tty_pid" 2>/dev/null | tr -d ' ')
+    pid=$(ps -o ppid= -p "$pid" 2>/dev/null | tr -d ' ')
     hops=$((hops + 1))
   done
+  return 1
+}
+
+gui_pid=""
+# First attempt: the client_tty captured from the current pane.
+[ -n "$client_tty" ] && _try_walk_tty "$client_tty"
+
+# Fallback: a tmux session may have multiple attached clients on different
+# ttys, and the captured one can be a zombie (terminal closed but tmux still
+# holds the slave). Iterate ALL attached clients, preferring focused + most
+# recently active, until one reaches a real GUI terminal.
+if [ -z "$gui_pid" ] && [ -n "$TMUX" ]; then
+  while IFS= read -r candidate_tty; do
+    [ -z "$candidate_tty" ] && continue
+    _try_walk_tty "$candidate_tty" && break
+  done < <(tmux list-clients -F '#{client_focused}|#{client_activity}|#{client_tty}' 2>/dev/null \
+            | sort -t'|' -k1,1nr -k2,2nr \
+            | cut -d'|' -f3)
 fi
 
 cwd_basename=$(basename "${cwd:-$PWD}")
