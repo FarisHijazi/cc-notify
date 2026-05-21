@@ -10,6 +10,30 @@ route_file="/tmp/cc-notify/${session_id}.route"
 # shellcheck disable=SC1090
 . "$route_file"
 
+# Split tmux_target ("session:window.pane") into parts for explicit selection.
+tmux_session="" tmux_window="" tmux_pane=""
+if [ -n "$tmux_target" ]; then
+  tmux_session="${tmux_target%%:*}"
+  _rest="${tmux_target#*:}"
+  tmux_window="${_rest%%.*}"
+  tmux_pane="${_rest#*.}"
+fi
+
+# Switch tmux to the captured session, window, and pane. switch-client alone
+# doesn't reliably select the target window when the client is already on the
+# same session, so do session/window/pane as three explicit steps.
+tmux_jump() {
+  [ -n "$tmux_session" ] || return 0
+  [ -n "$client_tty" ] || return 0
+  local cur_ses
+  cur_ses=$(tmux display-message -c "$client_tty" -p '#S' 2>/dev/null)
+  if [ "$cur_ses" != "$tmux_session" ]; then
+    tmux switch-client -c "$client_tty" -t "$tmux_session" 2>/dev/null
+  fi
+  [ -n "$tmux_window" ] && tmux select-window -t "$tmux_session:$tmux_window" 2>/dev/null
+  [ -n "$tmux_pane" ]   && tmux select-pane   -t "$tmux_session:$tmux_window.$tmux_pane" 2>/dev/null
+}
+
 case "$term" in
   Apple_Terminal)
     # Find the Terminal window+tab whose tty matches and bring it frontmost.
@@ -47,10 +71,7 @@ OSA
     fi
 
     sleep 0.1
-    if [ -n "$tmux_target" ] && [ -n "$client_tty" ]; then
-      tmux switch-client -c "$client_tty" -t "$tmux_target" 2>/dev/null \
-        || tmux select-window -t "$tmux_target" 2>/dev/null
-    fi
+    tmux_jump
     ;;
 
   vscode)
@@ -71,13 +92,13 @@ OSA
   iTerm.app)
     open -a iTerm 2>/dev/null
     sleep 0.15
-    [ -n "$tmux_target" ] && tmux switch-client -c "$client_tty" -t "$tmux_target" 2>/dev/null
+    tmux_jump
     ;;
 
   ghostty)
     open -a Ghostty 2>/dev/null
     sleep 0.15
-    [ -n "$tmux_target" ] && tmux switch-client -c "$client_tty" -t "$tmux_target" 2>/dev/null
+    tmux_jump
     ;;
 
   *)
