@@ -40,21 +40,24 @@ if [ -n "$TMUX" ] && [ -n "$TMUX_PANE" ]; then
   client_tty=$(tmux display-message -t "$TMUX_PANE" -p '#{client_tty}' 2>/dev/null)
 fi
 
-# Recent tmux overrides TERM_PROGRAM=tmux. Recover the outer terminal app by
-# walking up from any process on the client tty until we hit a known GUI term.
-if [ "$term" = "tmux" ] && [ -n "$client_tty" ]; then
+# Walk ps tree from client_tty up to find the GUI terminal app's PID.
+# Two purposes: (1) recover TERM_PROGRAM when tmux clobbers it to "tmux",
+# (2) save gui_pid so the click handler can ask Aerospace for THAT specific
+# window — handles the case where a user has multiple Terminal.app processes
+# (one per workspace under Aerospace), each of which AppleScript can't all see.
+gui_pid=""
+if [ -n "$client_tty" ]; then
   tty_short="${client_tty#/dev/}"
-  # Pick any process attached to the tty (e.g. login/zsh/tmux) and walk up.
   tty_pid=$(ps -t "$tty_short" -o pid= 2>/dev/null | head -1 | tr -d ' ')
   hops=0
   while [ -n "$tty_pid" ] && [ "$tty_pid" != "1" ] && [ "$hops" -lt 20 ]; do
     cmd=$(ps -o comm= -p "$tty_pid" 2>/dev/null)
     case "$cmd" in
-      */Terminal|Terminal)              term="Apple_Terminal"; break ;;
-      */iTerm2|iTerm2|*/iTerm|iTerm)    term="iTerm.app"; break ;;
-      */Ghostty|Ghostty|*/ghostty|ghostty) term="ghostty"; break ;;
-      */Cursor|Cursor)                  term="vscode"; break ;;
-      */Code\ Helper*|*/Electron|*/Code|Code) term="vscode"; break ;;
+      */Terminal|Terminal)              [ "$term" = "tmux" ] && term="Apple_Terminal"; gui_pid="$tty_pid"; break ;;
+      */iTerm2|iTerm2|*/iTerm|iTerm)    [ "$term" = "tmux" ] && term="iTerm.app";      gui_pid="$tty_pid"; break ;;
+      */Ghostty|Ghostty|*/ghostty|ghostty) [ "$term" = "tmux" ] && term="ghostty";     gui_pid="$tty_pid"; break ;;
+      */Cursor|Cursor)                  [ "$term" = "tmux" ] && term="vscode";         gui_pid="$tty_pid"; break ;;
+      */Code\ Helper*|*/Electron|*/Code|Code) [ "$term" = "tmux" ] && term="vscode";   gui_pid="$tty_pid"; break ;;
     esac
     tty_pid=$(ps -o ppid= -p "$tty_pid" 2>/dev/null | tr -d ' ')
     hops=$((hops + 1))
@@ -87,6 +90,7 @@ route_file="$state_dir/${session_id:-default}.route"
   printf 'client_tty=%q\n' "$client_tty"
   printf 'cwd=%q\n' "$cwd"
   printf 'tmux_socket=%q\n' "${TMUX%%,*}"
+  printf 'gui_pid=%q\n' "$gui_pid"
 } >"$route_file" 2>/dev/null
 
 # Build notification copy.
