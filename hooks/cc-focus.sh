@@ -48,11 +48,17 @@ tmux_jump() {
 }
 
 case "$term" in
+# Track whether ANY focus action actually fired. The hotkey wrapper uses the
+# exit code to decide whether to dismiss the banner.
+focused=""
+[ -n "$aerospace_focused" ] && focused=1
+
+case "$term" in
   Apple_Terminal)
     # Aerospace-by-pid was tried above; if it didn't work, fall back to
     # AppleScript-by-tty (works when there's only one Terminal.app process).
     if [ -z "$aerospace_focused" ] && [ -n "$client_tty" ]; then
-      osascript <<OSA >/dev/null 2>&1
+      result=$(osascript <<OSA 2>/dev/null
 tell application "Terminal"
   activate
   set targetTty to "$client_tty"
@@ -63,15 +69,19 @@ tell application "Terminal"
           set selected of t to true
           set index of w to 1
           set frontmost of w to true
-          return
+          return "matched"
         end if
       end try
     end repeat
   end repeat
+  return "nomatch"
 end tell
 OSA
+)
+      [ "$result" = "matched" ] && focused=1
     elif [ -z "$aerospace_focused" ]; then
-      open -a Terminal 2>/dev/null
+      # Fallback: activate the app (no specific window target — best effort).
+      open -a Terminal 2>/dev/null && focused=1
     fi
 
     sleep 0.1
@@ -79,28 +89,25 @@ OSA
     ;;
 
   vscode)
-    # vscode env var is set by both VS Code and Cursor (Cursor is a fork).
-    # Prefer whichever app is actually running.
     if pgrep -xq Cursor 2>/dev/null; then
-      open -a Cursor 2>/dev/null
+      open -a Cursor 2>/dev/null && focused=1
       command -v cursor >/dev/null && [ -n "$cwd" ] && cursor --reuse-window "$cwd" 2>/dev/null &
     elif pgrep -xq "Code" 2>/dev/null || pgrep -xq "Code Helper" 2>/dev/null; then
-      open -a "Visual Studio Code" 2>/dev/null
+      open -a "Visual Studio Code" 2>/dev/null && focused=1
       command -v code >/dev/null && [ -n "$cwd" ] && code --reuse-window "$cwd" 2>/dev/null &
     else
-      open -a "Visual Studio Code" 2>/dev/null || open -a Cursor 2>/dev/null
+      open -a "Visual Studio Code" 2>/dev/null && focused=1 || { open -a Cursor 2>/dev/null && focused=1; }
     fi
-    # Cannot focus a specific integrated-terminal pane — no API for that.
     ;;
 
   iTerm.app)
-    [ -z "$aerospace_focused" ] && open -a iTerm 2>/dev/null
+    [ -z "$aerospace_focused" ] && { open -a iTerm 2>/dev/null && focused=1; }
     sleep 0.15
     tmux_jump
     ;;
 
   ghostty)
-    [ -z "$aerospace_focused" ] && open -a Ghostty 2>/dev/null
+    [ -z "$aerospace_focused" ] && { open -a Ghostty 2>/dev/null && focused=1; }
     sleep 0.15
     tmux_jump
     ;;
@@ -110,4 +117,5 @@ OSA
     ;;
 esac
 
-exit 0
+[ -n "$focused" ] && exit 0
+exit 1
