@@ -64,8 +64,29 @@ _try_walk_tty() {
 }
 
 gui_pid=""
-# First attempt: the client_tty captured from the current pane.
-[ -n "$client_tty" ] && _try_walk_tty "$client_tty"
+
+# Primary: walk PPID from our own process up. Works when claude is run
+# directly from a terminal shell (no tmux, or tmux env got stripped along
+# the way). For tmux-attached claude, the PPID chain typically goes through
+# the tmux server (launchd-parented) and finds no terminal — the tty walks
+# below cover that case.
+_my_pid=$$
+_hops=0
+while [ -n "$_my_pid" ] && [ "$_my_pid" != "1" ] && [ "$_hops" -lt 30 ]; do
+  _cmd=$(ps -o comm= -p "$_my_pid" 2>/dev/null)
+  case "$_cmd" in
+    */Terminal|Terminal)              [ "$term" = "tmux" ] && term="Apple_Terminal"; gui_pid="$_my_pid"; break ;;
+    */iTerm2|iTerm2|*/iTerm|iTerm)    [ "$term" = "tmux" ] && term="iTerm.app";      gui_pid="$_my_pid"; break ;;
+    */Ghostty|Ghostty|*/ghostty|ghostty) [ "$term" = "tmux" ] && term="ghostty";     gui_pid="$_my_pid"; break ;;
+    */Cursor|Cursor)                  [ "$term" = "tmux" ] && term="vscode";         gui_pid="$_my_pid"; break ;;
+    */Code\ Helper*|*/Electron|*/Code|Code) [ "$term" = "tmux" ] && term="vscode";   gui_pid="$_my_pid"; break ;;
+  esac
+  _my_pid=$(ps -o ppid= -p "$_my_pid" 2>/dev/null | tr -d ' ')
+  _hops=$((_hops + 1))
+done
+
+# Fallback: the client_tty captured from the current pane.
+[ -z "$gui_pid" ] && [ -n "$client_tty" ] && _try_walk_tty "$client_tty"
 
 # Fallback: a tmux session may have multiple attached clients on different
 # ttys, and the captured one can be a zombie (terminal closed but tmux still
