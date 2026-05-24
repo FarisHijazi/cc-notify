@@ -8,13 +8,22 @@
 # Debug ping so we can verify Karabiner is actually invoking us.
 printf '[%s] cc-banner-click invoked\n' "$(date +%T)" >> /tmp/cc-banner-click.log
 
-latest=$(ls -t /tmp/cc-notify/*.route 2>/dev/null | head -1)
-if [ -z "$latest" ]; then
-  osascript -e 'display notification "No recent Claude Code notification to focus." with title "cc-notify"' 2>/dev/null
-  exit 1
-fi
+# Find the most recent route file whose alerter is STILL running — i.e., a
+# banner that's currently displayed. Skip stale routes for banners that
+# already timed out or were dismissed.
+session_id=""
+for route in $(ls -t /tmp/cc-notify/*.route 2>/dev/null); do
+  candidate_sid=$(basename "$route" .route)
+  if pgrep -f "alerter.*cc-$candidate_sid" >/dev/null 2>&1; then
+    session_id="$candidate_sid"
+    break
+  fi
+done
 
-session_id=$(basename "$latest" .route)
+if [ -z "$session_id" ]; then
+  # No live banner — hotkey is a no-op.
+  exit 2
+fi
 
 # Try the plugin-installed focus script first; fall back to manual install path.
 focus_rc=2

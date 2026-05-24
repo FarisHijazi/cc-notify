@@ -88,14 +88,26 @@ if [ "$event_kind" = "stop" ]; then
   # Kill-switch sentinel.
   [ -f "$HOME/.claude/notify.disable_stop" ] && exit 0
 
-  # Suppress if originating terminal app is currently frontmost.
-  frontmost=$(osascript -e 'tell application "System Events" to name of first application process whose frontmost is true' 2>/dev/null)
-  case "$term" in
-    Apple_Terminal) [ "$frontmost" = "Terminal" ] && exit 0 ;;
-    vscode)         [ "$frontmost" = "Code" ] || [ "$frontmost" = "Cursor" ] && exit 0 ;;
-    iTerm.app)      [ "$frontmost" = "iTerm2" ] || [ "$frontmost" = "iTerm" ] && exit 0 ;;
-    ghostty)        [ "$frontmost" = "ghostty" ] || [ "$frontmost" = "Ghostty" ] && exit 0 ;;
-  esac
+  # Window-level frontmost check. App-level ("is Terminal frontmost?") is too
+  # coarse for tiled layouts (Aerospace etc.) where the terminal can be the
+  # frontmost APP while a side-by-side window has focus. Compare Aerospace's
+  # focused-window id to the specific terminal window's id.
+  if [ -n "$gui_pid" ] && command -v aerospace >/dev/null 2>&1; then
+    claude_wid=$(aerospace list-windows --monitor all --pid "$gui_pid" --format '%{window-id}' 2>/dev/null | head -1)
+    focused_wid=$(aerospace list-windows --focused --format '%{window-id}' 2>/dev/null)
+    if [ -n "$claude_wid" ] && [ "$claude_wid" = "$focused_wid" ]; then
+      exit 0
+    fi
+  else
+    # Fallback: no Aerospace or no gui_pid — fall back to app-level check.
+    frontmost=$(osascript -e 'tell application "System Events" to name of first application process whose frontmost is true' 2>/dev/null)
+    case "$term" in
+      Apple_Terminal) [ "$frontmost" = "Terminal" ] && exit 0 ;;
+      vscode)         [ "$frontmost" = "Code" ] || [ "$frontmost" = "Cursor" ] && exit 0 ;;
+      iTerm.app)      [ "$frontmost" = "iTerm2" ] || [ "$frontmost" = "iTerm" ] && exit 0 ;;
+      ghostty)        [ "$frontmost" = "ghostty" ] || [ "$frontmost" = "Ghostty" ] && exit 0 ;;
+    esac
+  fi
 fi
 
 # Persist routing payload for the click handler.
