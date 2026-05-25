@@ -10,14 +10,15 @@ route_file="/tmp/cc-notify/${session_id}.route"
 # shellcheck disable=SC1090
 . "$route_file"
 
-# Focus the right window via Aerospace by GUI process PID. This bypasses
-# AppleScript multi-instance issues — macOS can host multiple Terminal.app
-# processes (e.g. one per Aerospace workspace), and `tell application "Terminal"`
-# only sees windows of ONE process. Aerospace sees every window regardless of
-# which process owns it, and `focus --window-id` also switches workspace.
+# Focus via Aerospace. Prefer the explicitly-captured target_wid (captured at
+# SessionStart/UserPromptSubmit when the user was reliably looking at the
+# right window). Fall back to gui_pid-based lookup if no captured wid.
 aerospace_focused=""
-if [ -n "$gui_pid" ] && command -v aerospace >/dev/null 2>&1; then
-  wid=$(aerospace list-windows --monitor all --pid "$gui_pid" --format '%{window-id}' 2>/dev/null | head -1)
+if command -v aerospace >/dev/null 2>&1; then
+  wid="$target_wid"
+  if [ -z "$wid" ] && [ -n "$gui_pid" ]; then
+    wid=$(aerospace list-windows --monitor all --pid "$gui_pid" --format '%{window-id}' 2>/dev/null | head -1)
+  fi
   if [ -n "$wid" ]; then
     aerospace focus --window-id "$wid" 2>/dev/null && aerospace_focused=1
   fi
@@ -36,15 +37,21 @@ fi
 # doesn't reliably select the target window when the client is already on the
 # same session, so do session/window/pane as three explicit steps.
 tmux_jump() {
-  [ -n "$tmux_session" ] || return 0
-  [ -n "$client_tty" ] || return 0
-  local cur_ses
-  cur_ses=$(tmux display-message -c "$client_tty" -p '#S' 2>/dev/null)
+  [ -n "$tmux_session" ] || { echo "tmux_jump: no tmux_session" >>/tmp/cc-notify.tmux.log; return 0; }
+  [ -n "$client_tty" ]  || { echo "tmux_jump: no client_tty"  >>/tmp/cc-notify.tmux.log; return 0; }
+  local cur_ses sw_rc win_rc pane_rc
+  cur_ses=$(tmux display-message -c "$client_tty" -p '#S' 2>&1)
   if [ "$cur_ses" != "$tmux_session" ]; then
-    tmux switch-client -c "$client_tty" -t "$tmux_session" 2>/dev/null
+    tmux switch-client -c "$client_tty" -t "$tmux_session" >>/tmp/cc-notify.tmux.log 2>&1
+    sw_rc=$?
   fi
-  [ -n "$tmux_window" ] && tmux select-window -t "$tmux_session:$tmux_window" 2>/dev/null
-  [ -n "$tmux_pane" ]   && tmux select-pane   -t "$tmux_session:$tmux_window.$tmux_pane" 2>/dev/null
+  [ -n "$tmux_window" ] && tmux select-window -t "$tmux_session:$tmux_window" >>/tmp/cc-notify.tmux.log 2>&1
+  win_rc=$?
+  [ -n "$tmux_pane" ]   && tmux select-pane   -t "$tmux_session:$tmux_window.$tmux_pane" >>/tmp/cc-notify.tmux.log 2>&1
+  pane_rc=$?
+  printf '[%s] tmux_jump tty=%s sess=%s win=%s pane=%s  cur_ses_was=%s  sw=%s win=%s pane=%s\n' \
+    "$(date +%T)" "$client_tty" "$tmux_session" "$tmux_window" "$tmux_pane" \
+    "$cur_ses" "$sw_rc" "$win_rc" "$pane_rc" >> /tmp/cc-notify.tmux.log
 }
 
 # Track whether ANY focus action actually fired. The hotkey wrapper uses the

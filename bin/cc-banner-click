@@ -8,6 +8,25 @@
 # Debug ping so we can verify Karabiner is actually invoking us.
 printf '[%s] cc-banner-click invoked\n' "$(date +%T)" >> /tmp/cc-banner-click.log
 
+# Debounce: if we fired in the last 800ms, skip. Karabiner sends repeated
+# events while the hotkey is held, and each firing kills the latest live
+# alerter — so repeat-firing cycles through all live banners and lands on
+# whichever happens to be last. One press, one focus.
+LOCK=/tmp/cc-banner-click.lock
+now_ms=$(($(date +%s%N) / 1000000))
+if [ -f "$LOCK" ]; then
+  last_ms=$(cat "$LOCK" 2>/dev/null || echo 0)
+  if [ $((now_ms - last_ms)) -lt 800 ]; then
+    exit 4
+  fi
+fi
+printf '%s' "$now_ms" > "$LOCK"
+
+# Tiny settle delay — lets any in-flight key-release events finish dispatching
+# to the original window before we change focus and start sending tmux commands.
+# Without this, residual keystrokes can land in the target tmux pane.
+sleep 0.15
+
 # Find the most recent route file whose alerter is STILL running — i.e., a
 # banner that's currently displayed. Skip stale routes for banners that
 # already timed out or were dismissed.
@@ -22,8 +41,18 @@ done
 
 if [ -z "$session_id" ]; then
   # No live banner — hotkey is a no-op.
+  printf '[%s] HOTKEY no-op (no live banner)\n' "$(date +%T)" >> /tmp/cc-notify.gate.log
   exit 2
 fi
+
+# DEBUG: log what we picked
+printf '[%s] HOTKEY picked sid=%s\n' "$(date +%T)" "$session_id" >> /tmp/cc-notify.gate.log
+{
+  printf '  route_file=%s\n' "/tmp/cc-notify/$session_id.route"
+  printf '  '; cat "/tmp/cc-notify/$session_id.route" 2>/dev/null | tr '\n' ' '
+  printf '\n  live alerters:\n'
+  pgrep -fl 'alerter.*cc-' 2>/dev/null | sed 's/^/    /'
+} >> /tmp/cc-notify.gate.log
 
 # Try the plugin-installed focus script first; fall back to manual install path.
 focus_rc=2

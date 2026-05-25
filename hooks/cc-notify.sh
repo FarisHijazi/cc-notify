@@ -101,6 +101,14 @@ if [ -z "$gui_pid" ] && [ -n "$TMUX" ]; then
             | cut -d'|' -f3)
 fi
 
+# Captured Aerospace window id from SessionStart / UserPromptSubmit hooks.
+# This is the most reliable signal for which GUI window the user is in,
+# especially for editors (VS Code, Cursor) where one process owns many
+# windows and process-tree walking can't distinguish them.
+target_wid=""
+[ -n "$session_id" ] && [ -f "/tmp/cc-notify/${session_id}.window" ] \
+  && target_wid=$(cat "/tmp/cc-notify/${session_id}.window" 2>/dev/null)
+
 cwd_basename=$(basename "${cwd:-$PWD}")
 git_branch=$(git -C "${cwd:-$PWD}" symbolic-ref --short HEAD 2>/dev/null)
 
@@ -109,18 +117,19 @@ if [ "$event_kind" = "stop" ]; then
   # Kill-switch sentinel.
   [ -f "$HOME/.claude/notify.disable_stop" ] && exit 0
 
-  # Window-level frontmost check. App-level ("is Terminal frontmost?") is too
-  # coarse for tiled layouts (Aerospace etc.) where the terminal can be the
-  # frontmost APP while a side-by-side window has focus. Compare Aerospace's
-  # focused-window id to the specific terminal window's id.
-  if [ -n "$gui_pid" ] && command -v aerospace >/dev/null 2>&1; then
-    claude_wid=$(aerospace list-windows --monitor all --pid "$gui_pid" --format '%{window-id}' 2>/dev/null | head -1)
+  # Window-level frontmost check. Prefer the captured target_wid (most
+  # reliable, especially for editors); fall back to gui_pid-based lookup;
+  # final fallback is app-level frontmost (only used when Aerospace is
+  # unavailable or no window was captured).
+  if command -v aerospace >/dev/null 2>&1; then
     focused_wid=$(aerospace list-windows --focused --format '%{window-id}' 2>/dev/null)
+    claude_wid="$target_wid"
+    [ -z "$claude_wid" ] && [ -n "$gui_pid" ] \
+      && claude_wid=$(aerospace list-windows --monitor all --pid "$gui_pid" --format '%{window-id}' 2>/dev/null | head -1)
     if [ -n "$claude_wid" ] && [ "$claude_wid" = "$focused_wid" ]; then
       exit 0
     fi
   else
-    # Fallback: no Aerospace or no gui_pid — fall back to app-level check.
     frontmost=$(osascript -e 'tell application "System Events" to name of first application process whose frontmost is true' 2>/dev/null)
     case "$term" in
       Apple_Terminal) [ "$frontmost" = "Terminal" ] && exit 0 ;;
@@ -140,6 +149,7 @@ route_file="$state_dir/${session_id:-default}.route"
   printf 'cwd=%q\n' "$cwd"
   printf 'tmux_socket=%q\n' "${TMUX%%,*}"
   printf 'gui_pid=%q\n' "$gui_pid"
+  printf 'target_wid=%q\n' "$target_wid"
 } >"$route_file" 2>/dev/null
 
 # Build notification copy.

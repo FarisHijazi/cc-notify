@@ -11,7 +11,7 @@ result=$("$alerter_bin" \
   --message  "$4" \
   --sound    "$5" \
   --group    "cc-$1" \
-  --timeout  30 \
+  --timeout  120 \
   --ignore-dnd 2>/dev/null)
 
 case "$result" in
