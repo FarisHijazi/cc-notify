@@ -37,21 +37,15 @@ fi
 # doesn't reliably select the target window when the client is already on the
 # same session, so do session/window/pane as three explicit steps.
 tmux_jump() {
-  [ -n "$tmux_session" ] || { echo "tmux_jump: no tmux_session" >>/tmp/cc-notify.tmux.log; return 0; }
-  [ -n "$client_tty" ]  || { echo "tmux_jump: no client_tty"  >>/tmp/cc-notify.tmux.log; return 0; }
   local cur_ses sw_rc win_rc pane_rc
   cur_ses=$(tmux display-message -c "$client_tty" -p '#S' 2>&1)
   if [ "$cur_ses" != "$tmux_session" ]; then
-    tmux switch-client -c "$client_tty" -t "$tmux_session" >>/tmp/cc-notify.tmux.log 2>&1
     sw_rc=$?
   fi
-  [ -n "$tmux_window" ] && tmux select-window -t "$tmux_session:$tmux_window" >>/tmp/cc-notify.tmux.log 2>&1
   win_rc=$?
-  [ -n "$tmux_pane" ]   && tmux select-pane   -t "$tmux_session:$tmux_window.$tmux_pane" >>/tmp/cc-notify.tmux.log 2>&1
   pane_rc=$?
   printf '[%s] tmux_jump tty=%s sess=%s win=%s pane=%s  cur_ses_was=%s  sw=%s win=%s pane=%s\n' \
     "$(date +%T)" "$client_tty" "$tmux_session" "$tmux_window" "$tmux_pane" \
-    "$cur_ses" "$sw_rc" "$win_rc" "$pane_rc" >> /tmp/cc-notify.tmux.log
 }
 
 # Track whether ANY focus action actually fired. The hotkey wrapper uses the
