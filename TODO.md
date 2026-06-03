@@ -20,6 +20,6 @@ Option 3 is the easiest user-facing fix. Option 1 is the cleanest architecturall
 
 ## Other known limitations
 
-- VS Code / Cursor integrated terminal panes can't be focused individually — no API exists.
+- VS Code / Cursor: window-level focus works (matched by workspace folder basename), but individual integrated terminal panes within a window can't be focused — no API exists.
 - SSH-remote sessions can't deliver Mac banners back (Tier 1: just bell + remote log).
 - First click triggers macOS Automation permission prompts; user must allow once.

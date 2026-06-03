@@ -117,7 +117,17 @@ aerospace focus --window-id "$wid"   # also switches workspace if window is on a
 
 Aerospace sees every window regardless of which process owns it.
 
-## 11. tmux `allow-passthrough on` matters for OSC escape sequences
+## 11. Don't use `code --reuse-window` / `cursor --reuse-window` for *focus*
+
+It looks like a focus command but it's actually `--reuse-window <path>` — meaning "open `<path>` in an existing window, even if that path is a subdirectory of an already-open workspace." If `cwd` is a subdir, it re-opens that subdir as the active view, effectively losing the user's broader workspace context.
+
+For "just focus the right window," enumerate windows from Aerospace and match by title:
+- Editor titles follow `FILE — FOLDER` (or `FOLDER` if no file).
+- Walk up from `cwd`: at each level, find a window whose last `—`-separated segment equals the basename.
+- Priority: exact cwd basename, then parent, grandparent, etc.
+- Focus the match with `aerospace focus --window-id <wid>` — no editor CLI involved, no path-reopening side effect.
+
+## 12. tmux `allow-passthrough on` matters for OSC escape sequences
 
 Not used in cc-notify v1 (the SSH branch just uses `\a` bell), but if you ever want to forward iTerm2-native notifications through tmux from a remote machine, you need this in `~/.tmux.conf`:
 

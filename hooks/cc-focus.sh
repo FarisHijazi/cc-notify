@@ -89,14 +89,42 @@ OSA
     ;;
 
   vscode)
-    if pgrep -xq Cursor 2>/dev/null; then
-      open -a Cursor 2>/dev/null && focused=1
-      command -v cursor >/dev/null && [ -n "$cwd" ] && cursor --reuse-window "$cwd" 2>/dev/null &
-    elif pgrep -xq "Code" 2>/dev/null || pgrep -xq "Code Helper" 2>/dev/null; then
-      open -a "Visual Studio Code" 2>/dev/null && focused=1
-      command -v code >/dev/null && [ -n "$cwd" ] && code --reuse-window "$cwd" 2>/dev/null &
-    else
-      open -a "Visual Studio Code" 2>/dev/null && focused=1 || { open -a Cursor 2>/dev/null && focused=1; }
+    # If the captured target_wid focus didn't fire (e.g. session started before
+    # cc-capture-window.sh existed), match a Cursor/VS Code window by cwd: walk
+    # up from cwd looking for an ancestor whose basename matches the workspace
+    # folder shown in a window's title (titles look like "FILE — FOLDER"). This
+    # avoids `--reuse-window`, which OPENS a new view rooted at cwd instead of
+    # focusing an existing window.
+    if [ -z "$aerospace_focused" ] && [ -n "$cwd" ] && command -v aerospace >/dev/null 2>&1; then
+      candidates=$(aerospace list-windows --monitor all --format '%{window-id}|%{app-name}|%{window-title}' 2>/dev/null \
+        | awk -F'|' '$2 == "Cursor" || $2 == "Code" || $2 == "Visual Studio Code"')
+      dir="$cwd"
+      while [ -n "$dir" ] && [ "$dir" != "/" ]; do
+        target_base=$(basename "$dir")
+        match_wid=$(printf '%s\n' "$candidates" | awk -F'|' -v tb="$target_base" '
+          {
+            n = split($3, parts, " — ")
+            last = parts[n]
+            sub(/ \(Workspace\)$/, "", last)
+            if (last == tb) { print $1; exit }
+          }')
+        if [ -n "$match_wid" ]; then
+          aerospace focus --window-id "$match_wid" 2>/dev/null && focused=1
+          break
+        fi
+        dir=$(dirname "$dir")
+      done
+    fi
+    # Last-resort fallback: activate the app (NO --reuse-window — that opens
+    # a new window/folder, which is exactly what the user doesn't want).
+    if [ -z "$focused" ]; then
+      if pgrep -xq Cursor 2>/dev/null; then
+        open -a Cursor 2>/dev/null && focused=1
+      elif pgrep -xq "Code" 2>/dev/null || pgrep -xq "Code Helper" 2>/dev/null; then
+        open -a "Visual Studio Code" 2>/dev/null && focused=1
+      else
+        open -a "Visual Studio Code" 2>/dev/null && focused=1 || { open -a Cursor 2>/dev/null && focused=1; }
+      fi
     fi
     ;;
 
