@@ -4,8 +4,8 @@ State snapshot for picking up later. See @README.md for user-facing docs, @LESSO
 
 ## Status
 
-- **Version**: 1.5.0 (pushed to `github.com/FarisHijazi/claude-plugins` marketplace + `github.com/FarisHijazi/cc-notify` standalone)
-- **Installed**: via marketplace, autoUpdate on. Live caches at `~/.claude/plugins/cache/farishijazi-plugins/cc-notify/{1.0.0,1.3.2,1.3.3,1.4.0}/` — all have been hand-patched to v1.5.0 scripts.
+- **Version**: 1.6.0 (pushed to `github.com/FarisHijazi/claude-plugins` marketplace + `github.com/FarisHijazi/cc-notify` standalone)
+- **Installed**: via marketplace, autoUpdate on. Live caches at `~/.claude/plugins/cache/farishijazi-plugins/cc-notify/{1.0.0,1.3.2,1.3.3,1.4.0}/` — all have been hand-patched to v1.6.0 scripts.
 - **Hotkey**: Karabiner-Elements rule binds `Option+Shift+A` → `bin/cc-banner-click`. Fires on key release (not key-down) with 150 ms settle delay + 800 ms debounce. Banner dismisses via `alerter --remove` only on successful focus.
 
 ## Architecture (3-script split + 1 capture helper)
@@ -24,7 +24,7 @@ State files in `/tmp/cc-notify/`:
 
 ## Decisions / non-obvious mechanics
 
-- **Window detection precedence**: captured `target_wid` (from cc-capture-window.sh) > `gui_pid` walk > AppleScript-by-tty > `open -a` fallback. Captured wid is the only reliable method for editors like VS Code/Cursor where one process owns many windows.
+- **Window detection precedence**: captured `target_wid` (from cc-capture-window.sh) > `gui_pid` walk > AppleScript-by-tty (Terminal.app) > **VS Code/Cursor workspace-folder match by walking up cwd** (v1.6.0) > `open -a` last resort. Never `--reuse-window` (it opens cwd as a sub-view).
 - **Stop gating**: only suppresses if the captured target window is currently Aerospace-focused. App-level frontmost check is a fallback when no Aerospace + no gui_pid.
 - **PPID walk first, then tty walks**: handles both non-tmux (`$TMUX` not set or stripped) and tmux-attached (PPID hits launchd-parented server). See @LESSONS.md gotcha #11 about multi-client tmux iteration.
 - **Hotkey fires on key release**: prevents key-repeat from cycling through all live banners. Plus 800ms script-level debounce.
@@ -32,9 +32,9 @@ State files in `/tmp/cc-notify/`:
 
 ## Known issues to pick up
 
-1. **vscode/cursor click-back lands on wrong window** — v1.5.0 SHOULD fix this via cc-capture-window.sh, but requires a fresh session start (or a UserPromptSubmit) for the capture to take effect. Open Cursor sessions started before v1.5.0 don't have captured wids — restart needed. Test by restarting the Cursor session, sending a message, then triggering Stop and clicking the banner.
-2. **tmux-watch monitor clients** — see @TODO.md. Sessions with only monitor clients (no real Terminal attached) can't be focused. Options: (a) skip monitor-client ttys when iterating, (b) spawn new Terminal as fallback, (c) refactor tmux-watch to mark its clients.
-3. **VS Code / Cursor pane focus** — can't target a specific integrated terminal pane (no API). Captured window-id gets us to the right window; user still finds the pane by eye.
+1. **tmux-watch monitor clients** — see @TODO.md. Sessions with only monitor clients (no real Terminal attached) can't be focused. Options: (a) skip monitor-client ttys when iterating, (b) spawn new Terminal as fallback, (c) refactor tmux-watch to mark its clients.
+2. **VS Code / Cursor pane focus** — can't target a specific integrated terminal pane (no API). Window-level match works; user still finds the pane by eye.
+3. **Two Cursor windows with the same workspace basename** — workspace-folder-basename matching picks the first one. Rare. Could disambiguate via `cursor --status` window list if it becomes an issue.
 
 ## Karabiner config
 
@@ -60,6 +60,6 @@ aerospace list-windows --focused --format '%{window-id}|%{app-name}|%{window-tit
 
 ## What to verify on resume
 
-1. **Cursor click-back works after a fresh Cursor session start** (the new SessionStart/UserPromptSubmit capture).
+1. **Cursor click-back lands on the right workspace window** (v1.6.0 workspace-folder match). Test by clicking from a Claude session whose cwd is a subdir of an open Cursor workspace — should focus that workspace's window, not re-open the subdir.
 2. **Stop suppression works correctly in side-by-side layouts** (already verified for Terminal.app, untested for Cursor).
-3. **autoUpdate pulls v1.5.0 cache** — currently the cache only has 1.0.0–1.4.0 dirs; 1.5.0 will arrive on next session start with autoUpdate.
+3. **autoUpdate pulls v1.6.0 cache** — currently the cache dirs are 1.0.0–1.4.0; v1.5.0/v1.6.0 will arrive on next session start with autoUpdate. All existing caches have been hand-patched.
