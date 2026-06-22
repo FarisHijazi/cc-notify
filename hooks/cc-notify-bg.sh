@@ -16,8 +16,15 @@ if [ -d "/Applications/Claude.app" ]; then
   sender_args=(--sender com.anthropic.claudefordesktop)
 fi
 
+# Orange Claude mark as a right-side content image (extra brand color in the
+# banner body — macOS won't let us color the banner background itself).
+image_args=()
+logo="$script_dir/../assets/claude-logo.png"
+[ -f "$logo" ] && image_args=(--content-image "$logo")
+
 result=$("$alerter_bin" \
   "${sender_args[@]}" \
+  "${image_args[@]}" \
   --title    "$2" \
   --subtitle "$3" \
   --message  "$4" \
