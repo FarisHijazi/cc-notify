@@ -39,16 +39,18 @@ function activate(context) {
         const wantedName = params.get('name') || '';
 
         // /rename path: set the tab name of the matching terminal. renameWithArg
-        // only acts on the ACTIVE terminal, so to avoid stealing focus / renaming
-        // the wrong tab we only rename when Claude's terminal is already active
-        // (true at SessionStart/UserPromptSubmit/turn-end). Fired with `open -g`,
-        // so the editor isn't brought forward.
+        // only acts on the ACTIVE terminal, so we reveal the pid-matched terminal
+        // first with show(true) — `true` preserves keyboard focus (doesn't pull
+        // you out of the editor), it just makes that terminal the active tab so
+        // the rename targets it. Fired with `open -g`, so the editor window isn't
+        // brought to the foreground either. This lets status badges update even on
+        // terminals you're not currently looking at.
         if (/\/rename$/.test(uri.path) && wantedName) {
-          const active = vscode.window.activeTerminal;
-          if (active) {
+          for (const term of vscode.window.terminals) {
             try {
-              const pid = await active.processId;
+              const pid = await term.processId;
               if (pid && wantedPids.has(pid)) {
+                term.show(true); // reveal as active tab, keep keyboard focus put
                 await vscode.commands.executeCommand(
                   'workbench.action.terminal.renameWithArg',
                   { name: wantedName }
@@ -58,7 +60,7 @@ function activate(context) {
               }
             } catch (e) {}
           }
-          breadcrumb(`rename skipped (claude terminal not active) → ${wantedName}`);
+          breadcrumb(`rename: no terminal matched pids=[${[...wantedPids].join(',')}]`);
           return;
         }
 

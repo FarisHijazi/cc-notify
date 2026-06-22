@@ -5,6 +5,8 @@
 
 event_kind="${1:-stop}"
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck disable=SC1091
+. "$script_dir/cc-lib.sh"
 log="$HOME/.claude/cc-notify.log"
 state_dir="/tmp/cc-notify"
 mkdir -p "$state_dir" 2>/dev/null
@@ -27,27 +29,11 @@ cwd="${cwd//_/ }"  # restore spaces
 [ "$transcript_path" = "-" ] && transcript_path=""
 transcript_path="${transcript_path//_/ }"
 
-# Session color: Claude Code's /color sets "agentColor" in the transcript JSONL.
-# Map it to a colored emoji so each session's banners (and terminal tab) carry a
-# consistent color marker — same source the gsd statusline/tmux color uses.
-color_emoji() {
-  case "$1" in
-    red) printf '🔴' ;; orange) printf '🟠' ;; yellow) printf '🟡' ;;
-    green) printf '🟢' ;; blue) printf '🔵' ;; purple) printf '🟣' ;;
-    pink) printf '🩷' ;; cyan) printf '🩵' ;; *) printf '' ;;
-  esac
-}
-# Session title: Claude Code's /rename writes "type":"custom-title" (customTitle);
-# Claude also auto-generates "aiTitle". Cascade custom → ai → project basename.
-agent_color="" emoji="" session_title=""
-if [ -n "$transcript_path" ] && [ -f "$transcript_path" ]; then
-  # One pass over the (possibly large) transcript for all three fields.
-  _meta=$(grep -oE '"(agentColor|customTitle|aiTitle)":"[^"]*"' "$transcript_path" 2>/dev/null)
-  agent_color=$(printf '%s\n' "$_meta" | grep '"agentColor"' | tail -1 | sed 's/.*:"//;s/"$//')
-  emoji=$(color_emoji "$agent_color")
-  session_title=$(printf '%s\n' "$_meta" | grep '"customTitle"' | tail -1 | sed 's/.*:"//;s/"$//')
-  [ -z "$session_title" ] && session_title=$(printf '%s\n' "$_meta" | grep '"aiTitle"' | tail -1 | sed 's/.*:"//;s/"$//')
-fi
+# Session color (/color → agentColor) + name (/rename → customTitle, else auto
+# aiTitle, else project) read from the transcript. See cc-lib.sh.
+cc_session_meta "$transcript_path" "$(basename "${cwd:-$PWD}")"
+emoji="$CC_COLOR_EMOJI"
+session_title="$CC_TITLE"
 
 # SSH branch: hook is running on a remote box. Bell + log, exit.
 if [ -n "$SSH_CONNECTION" ]; then
@@ -219,19 +205,23 @@ route_file="$state_dir/${session_id:-default}.route"
   printf 'shell_pids=%q\n' "$shell_pids_all"
 } >"$route_file" 2>/dev/null
 
-# Build notification copy.
+# Build notification copy. The bold title line is "<status> <color> <session>"
+# (no wasted "Claude Code" — the orange Claude content-image already brands it);
+# subtitle = the event; body = context / the actual request.
 if [ "$event_kind" = "notification" ]; then
-  title="Claude Code"
-  body="${message:-Awaiting input}"
+  status_emoji=$(cc_status_emoji needs_input)   # 🔔
   sound="Glass"
+  subtitle="Awaiting your input"
+  body="${message:-Claude needs you}"
 else
-  title="Claude Code"
-  body="Turn complete"
+  status_emoji=$(cc_status_emoji idle)          # 💤
   sound="Hero"
+  subtitle="Turn complete"
+  body="$cwd_basename"
+  [ -n "$git_branch" ] && body="$cwd_basename · $git_branch"
 fi
-subtitle="$cwd_basename"
-[ -n "$git_branch" ] && subtitle="$cwd_basename ($git_branch)"
-[ -n "$emoji" ] && subtitle="$emoji $subtitle"
+# Same "<status> <color> <name>" string drives both the banner title and the tab.
+title=$(cc_tab_name "$status_emoji" "$emoji" "${session_title:-$cwd_basename}")
 
 # Terminal-tab rename params (VS Code/Cursor only, and only if the focus
 # extension is installed). The bg worker does the URL-encode + `open -g` so it
@@ -239,14 +229,9 @@ subtitle="$cwd_basename"
 rename_scheme=""
 rename_name=""
 if [ "$term" = "vscode" ] && [ -n "$shell_pids_all" ]; then
-  case "$editor_app" in
-    Cursor) _s=cursor; _ed="$HOME/.cursor/extensions" ;;
-    *)      _s=vscode; _ed="$HOME/.vscode/extensions" ;;
-  esac
-  if ls -d "$_ed/farishijazi.cc-notify-focus"* >/dev/null 2>&1; then
-    rename_scheme="$_s"
-    rename_name="${emoji:+$emoji }${session_title:-$cwd_basename}"
-  fi
+  rename_scheme=$(cc_editor_scheme "$editor_app")
+  # Tab name == banner title: "<status> <color> <name>" — one consistent vocab.
+  [ -n "$rename_scheme" ] && rename_name="$title"
 fi
 
 # Spawn the bg worker fully detached: the outer subshell exits immediately,

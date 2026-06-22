@@ -30,7 +30,7 @@ fi
 
 # --- 2. ~/.claude/hooks symlinks ---------------------------------------------
 mkdir -p "$hooks_dir"
-for f in cc-notify.sh cc-notify-bg.sh cc-focus.sh; do
+for f in cc-lib.sh cc-notify.sh cc-notify-bg.sh cc-focus.sh cc-capture-window.sh; do
   src="$repo_dir/hooks/$f"
   dst="$hooks_dir/$f"
   if [ ! -f "$src" ]; then
