@@ -68,6 +68,14 @@ The extension ([`editor-extension/`](./editor-extension/)) registers a
 `terminal.show()` on the terminal whose shell pid matches. See
 [LESSONS.md](./LESSONS.md) gotcha #13.
 
+## Per-session color
+
+If you set a session color with Claude Code's `/color` command, cc-notify reads
+that `agentColor` from the transcript and prefixes the banner subtitle with a
+matching colored emoji (🔴🟠🟡🟢🔵🟣🩷🩵) — so banners from different sessions are
+distinguishable at a glance, using the *same* color you picked (the one your
+statusline / tmux already reflect). No `/color` set → no emoji.
+
 ## Toggle Stop notifications
 
 `Stop` fires the moment Claude is **fully done** — after every subagent has

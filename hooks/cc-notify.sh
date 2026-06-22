@@ -12,16 +12,36 @@ mkdir -p "$state_dir" 2>/dev/null
 input=$(cat 2>/dev/null)
 
 # Parse minimal fields via node (matches existing hook convention, no jq dep).
-read -r session_id cwd message <<<"$(printf '%s' "$input" | node -e '
+# transcript_path comes before the free-text message (paths have no spaces).
+read -r session_id cwd transcript_path message <<<"$(printf '%s' "$input" | node -e '
 let d="";process.stdin.on("data",c=>d+=c).on("end",()=>{
   try{const j=JSON.parse(d||"{}");
     const s=j.session_id||"";
     const c=(j.cwd||"").replace(/\s/g,"_");
+    const t=(j.transcript_path||"").replace(/\s/g,"_")||"-";
     const m=(j.message||j.title||"").replace(/\s+/g," ").slice(0,200);
-    process.stdout.write(`${s} ${c} ${m}`);
-  }catch(e){process.stdout.write("  ")}
+    process.stdout.write(`${s} ${c} ${t} ${m}`);
+  }catch(e){process.stdout.write("   ")}
 });' 2>/dev/null)"
 cwd="${cwd//_/ }"  # restore spaces
+[ "$transcript_path" = "-" ] && transcript_path=""
+transcript_path="${transcript_path//_/ }"
+
+# Session color: Claude Code's /color sets "agentColor" in the transcript JSONL.
+# Map it to a colored emoji so each session's banners (and terminal tab) carry a
+# consistent color marker — same source the gsd statusline/tmux color uses.
+color_emoji() {
+  case "$1" in
+    red) printf '🔴' ;; orange) printf '🟠' ;; yellow) printf '🟡' ;;
+    green) printf '🟢' ;; blue) printf '🔵' ;; purple) printf '🟣' ;;
+    pink) printf '🩷' ;; cyan) printf '🩵' ;; *) printf '' ;;
+  esac
+}
+agent_color="" emoji=""
+if [ -n "$transcript_path" ] && [ -f "$transcript_path" ]; then
+  agent_color=$(grep -oE '"agentColor":"[^"]+"' "$transcript_path" 2>/dev/null | tail -1 | sed 's/.*:"//;s/"$//')
+  emoji=$(color_emoji "$agent_color")
+fi
 
 # SSH branch: hook is running on a remote box. Bell + log, exit.
 if [ -n "$SSH_CONNECTION" ]; then
@@ -205,6 +225,7 @@ else
 fi
 subtitle="$cwd_basename"
 [ -n "$git_branch" ] && subtitle="$cwd_basename ($git_branch)"
+[ -n "$emoji" ] && subtitle="$emoji $subtitle"
 
 # Spawn the bg worker fully detached: the outer subshell exits immediately,
 # orphaning bg to launchd. No quote-nesting, no nohup needed.
