@@ -136,3 +136,30 @@ set -g allow-passthrough on
 ```
 
 Then `printf '\033]9;your message\007'` from inside tmux makes iTerm2 show its own native notification on the host machine, with no third-party tool. Doesn't work for Terminal.app, only iTerm2/Ghostty.
+
+## 13. Focusing a specific VS Code / Cursor terminal pane requires an extension
+
+There is **no** way to focus a specific integrated terminal pane from outside the
+editor. Confirmed dead ends (2026):
+
+- **CLI**: `code` / `cursor` have no `--command` / focus flag. `workbench.action.terminal.focusAtIndex1..9` exist internally but can't be invoked from the CLI.
+- **URI**: `open "vscode://command:..."` does **not** execute `command:` URIs — those only run inside trusted contexts (markdown hovers, webviews, tasks), not external `open`.
+- **OSC escape sequences**: shell integration (OSC 633) is one-way (terminal → editor: cwd, exec status). No focus/reveal sequence exists, even though our hook runs *inside* the exact terminal.
+
+The **only** working path is the extension Terminal API: `vscode.window.terminals[*].show()`. So cc-notify ships a ~40-line extension (`editor-extension/`) that registers a URI handler `vscode://farishijazi.cc-notify-focus/focus?pids=…` and calls `.show()` on the terminal whose `processId` is in the pid set.
+
+**Matching by pid, two cases:**
+- **No tmux**: Claude's shell is a direct ancestor of the hook (`hook → claude → shell → editor pty`), so the shell pid (== `Terminal.processId`) is in the hook's ancestor PPID chain.
+- **tmux inside the editor**: the chain hits the launchd-parented tmux *server* and never reaches the editor's shell. The real `Terminal.processId` is the tmux *client's* login shell — a sibling, found via `ps -t <client_tty>`. So cc-notify adds every pid on `client_tty` to the candidate set too.
+
+PIDs are unique per live process, so an ancestor/tty pid can only ever match the terminal we actually came from — never a sibling terminal.
+
+Install unpacked by symlinking the folder into `~/.vscode/extensions/` and `~/.cursor/extensions/` (`bin/cc-install-editor-extension`); reload the window. `Terminal.processId` is a `Thenable<number>` (await it). `terminal.show(false)` reveals **and takes focus** (`true` would preserve focus elsewhere).
+
+## 14. Claude logo on the banner: impersonate the bundle id, don't set --app-icon
+
+On modern macOS (Big Sur+) macOS ignores a notifier's custom icon and uses the
+**sending app's** icon. So `alerter --app-icon <path>` does nothing. The fix is
+`alerter --sender com.anthropic.claudefordesktop` — this impersonates `Claude.app`,
+so macOS draws Claude's orange logo. Requires `Claude.app` installed (no app → no
+icon override). Same trick Boris Buliga uses with `terminal-notifier -sender`.

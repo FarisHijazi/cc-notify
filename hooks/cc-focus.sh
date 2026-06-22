@@ -48,6 +48,40 @@ tmux_jump() {
   [ -n "$tmux_pane" ]   && tmux select-pane   -t "$tmux_session:$tmux_window.$tmux_pane" 2>/dev/null
 }
 
+# Ask the cc-notify-focus editor extension to reveal the exact integrated
+# terminal pane Claude runs in. The extension matches the terminal by its shell
+# pid (one of the captured `shell_pids`) and calls .show(). This is the only way
+# VS Code/Cursor allow focusing a specific terminal pane. No-op (the window is
+# already focused) when the extension isn't installed.
+focus_vscode_terminal() {
+  local wid="$1" app="$editor_app" scheme ext_dir
+  [ -n "$shell_pids" ] || return 0
+
+  # Resolve which editor: captured editor_app, else the focused window's app.
+  if [ -z "$app" ] && [ -n "$wid" ] && command -v aerospace >/dev/null 2>&1; then
+    app=$(aerospace list-windows --monitor all --format '%{window-id}|%{app-name}' 2>/dev/null \
+      | awk -F'|' -v w="$wid" '$1==w{print $2; exit}')
+  fi
+  case "$app" in
+    Cursor) scheme="cursor"; ext_dir="$HOME/.cursor/extensions" ;;
+    Code|"Visual Studio Code"|"Code - Insiders") scheme="vscode"; ext_dir="$HOME/.vscode/extensions" ;;
+    *)
+      # Unknown editor — fall back to whichever extension is installed.
+      if ls -d "$HOME/.cursor/extensions/farishijazi.cc-notify-focus"* >/dev/null 2>&1; then
+        scheme="cursor"; ext_dir="$HOME/.cursor/extensions"
+      else
+        scheme="vscode"; ext_dir="$HOME/.vscode/extensions"
+      fi
+      ;;
+  esac
+
+  # Only fire the URI if the extension is installed; otherwise the editor pops
+  # an "extension not installed" toast on every click.
+  ls -d "$ext_dir/farishijazi.cc-notify-focus"* >/dev/null 2>&1 || return 0
+
+  open "$scheme://farishijazi.cc-notify-focus/focus?pids=$shell_pids" 2>/dev/null
+}
+
 # Track whether ANY focus action actually fired. The hotkey wrapper uses the
 # exit code to decide whether to dismiss the banner.
 focused=""
@@ -126,6 +160,13 @@ OSA
         open -a "Visual Studio Code" 2>/dev/null && focused=1 || { open -a Cursor 2>/dev/null && focused=1; }
       fi
     fi
+
+    # Now focus the SPECIFIC integrated terminal pane (not just the window). The
+    # only mechanism VS Code/Cursor expose for this is the Terminal API, so we
+    # ask the cc-notify-focus extension (if installed) to .show() the terminal
+    # whose shell pid is in our captured ancestor chain. See editor-extension/.
+    focused_wid="${wid:-$match_wid}"
+    focus_vscode_terminal "$focused_wid"
     ;;
 
   iTerm.app)

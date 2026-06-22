@@ -1,0 +1,32 @@
+#!/usr/bin/env bash
+# Installs the cc-notify-focus editor extension into VS Code and/or Cursor by
+# symlinking the unpacked extension folder into their extensions directories.
+# After running, reload the window in each editor (Cmd+Shift+P → "Reload Window").
+set -euo pipefail
+
+script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+ext_src="$(cd "$script_dir/../editor-extension" && pwd)"
+ext_id="farishijazi.cc-notify-focus-1.0.0"
+
+[ -f "$ext_src/package.json" ] || { echo "ext source not found: $ext_src" >&2; exit 1; }
+
+installed_any=0
+for ext_dir in "$HOME/.vscode/extensions" "$HOME/.cursor/extensions"; do
+  parent="$(dirname "$ext_dir")"
+  # Only target editors that actually exist on this machine.
+  [ -d "$parent" ] || continue
+  mkdir -p "$ext_dir"
+  link="$ext_dir/$ext_id"
+  rm -rf "$link"
+  ln -s "$ext_src" "$link"
+  echo "linked → $link"
+  installed_any=1
+done
+
+if [ "$installed_any" -eq 0 ]; then
+  echo "No VS Code (~/.vscode) or Cursor (~/.cursor) install found." >&2
+  exit 1
+fi
+
+echo
+echo "Done. Reload the window in each editor: Cmd+Shift+P → 'Developer: Reload Window'."

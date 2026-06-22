@@ -1,0 +1,20 @@
+{
+  "name": "cc-notify-focus",
+  "displayName": "cc-notify: Focus Terminal",
+  "description": "Lets cc-notify jump focus to the exact integrated terminal a Claude Code session is running in, via a vscode://farishijazi.cc-notify-focus/focus?pids=... URI.",
+  "version": "1.0.0",
+  "publisher": "farishijazi",
+  "license": "MIT",
+  "engines": {
+    "vscode": "^1.70.0"
+  },
+  "categories": [
+    "Other"
+  ],
+  "activationEvents": [
+    "onUri",
+    "onStartupFinished"
+  ],
+  "main": "./extension.js",
+  "contributes": {}
+}

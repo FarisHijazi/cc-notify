@@ -49,6 +49,25 @@ macOS doesn't natively let you click a notification banner with the keyboard. Th
 
 The script exits non-zero if no route file exists or focus didn't fire, and the wrapper only dismisses the banner (via `alerter --remove`) on success — so the hotkey is safe to mash.
 
+## Optional: focus the exact VS Code / Cursor terminal pane
+
+By default, clicking a notification from a VS Code / Cursor session focuses the
+right **window**. To also jump to the **exact integrated terminal pane** Claude is
+running in, install the bundled editor extension (one-time):
+
+```bash
+"$HOME/.claude/plugins/marketplaces/farishijazi-plugins/plugins/cc-notify/bin/cc-install-editor-extension"
+```
+
+Then reload the window in each editor (Cmd+Shift+P → "Developer: Reload Window").
+
+This is the *only* way to focus a specific integrated terminal — VS Code/Cursor
+expose no CLI flag, `vscode://command:` URI, or terminal escape sequence for it.
+The extension ([`editor-extension/`](./editor-extension/)) registers a
+`vscode://farishijazi.cc-notify-focus/focus?pids=…` URI handler and calls
+`terminal.show()` on the terminal whose shell pid matches. See
+[LESSONS.md](./LESSONS.md) gotcha #13.
+
 ## Toggle Stop notifications
 
 `Stop` fires on every assistant turn end — noisy if you're actively iterating. Two gates:
@@ -69,12 +88,20 @@ rm ~/.claude/notify.disable_stop       # re-enable
 |---|---|
 | **Terminal.app + tmux** | AppleScript-by-tty finds the exact window/tab, Aerospace switches workspace, `tmux switch-client` + `select-window` + `select-pane` jumps the pane. |
 | **iTerm2 / Ghostty + tmux** | `open -a` + tmux jump. |
-| **VS Code / Cursor integrated terminal** | Focuses the existing editor window whose workspace folder matches `cwd` (exact, then closest parent dir) via Aerospace — no `--reuse-window` (which would re-open a sub-folder as a new view). **Cannot focus a specific integrated terminal pane** — VS Code exposes no API. |
+| **VS Code / Cursor integrated terminal** | Focuses the existing editor window whose workspace folder matches `cwd` (exact, then closest parent dir) via Aerospace — no `--reuse-window` (which would re-open a sub-folder as a new view). **With the [companion extension](#optional-focus-the-exact-vs-code--cursor-terminal-pane) installed, it also focuses the exact integrated terminal pane** Claude runs in. |
 | **SSH session on remote** | Bell + line appended to remote `~/.claude/inbox.log`. No Mac notification crosses the wire by design. |
 
 ## Why alerter and not `osascript`
 
 `osascript -e 'display notification'` is truly native but **not clickable** — Apple removed the click-callback path for unsigned scripts in 10.14+. `alerter` uses modern `UNUserNotificationCenter` and returns click signals to stdout. `terminal-notifier` is broken on macOS Tahoe (uses deprecated `NSUserNotification`).
+
+## Icon
+
+The banner shows the **orange Claude logo** (matching the Claude Code statusline
+accent) when `Claude.app` is installed — cc-notify impersonates its bundle id via
+`alerter --sender com.anthropic.claudefordesktop`. On modern macOS (Big Sur+) a
+custom `--app-icon` is ignored; sender impersonation is the only way to override
+the notification icon. Without `Claude.app`, the icon falls back to the default.
 
 ## How it works
 

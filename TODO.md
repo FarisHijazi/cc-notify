@@ -18,8 +18,12 @@ When a tmux session has ONLY tmux-watch clients (no real Terminal attached), cc-
 
 Option 3 is the easiest user-facing fix. Option 1 is the cleanest architecturally. Probably do both.
 
+## Done
+
+- ~~VS Code / Cursor: individual integrated terminal panes can't be focused~~ — **SOLVED in v1.7.0** via the `editor-extension/` (`terminal.show()` matched by shell pid; install with `bin/cc-install-editor-extension`). Remaining edge: two terminals whose shells share a pid set can't happen (pids are unique), but a session with *no* matching live terminal falls back to focusing the terminal panel.
+
 ## Other known limitations
 
-- VS Code / Cursor: window-level focus works (matched by workspace folder basename), but individual integrated terminal panes within a window can't be focused — no API exists.
+- VS Code / Cursor: needs the companion extension installed + window reloaded for pane-level focus; otherwise falls back to window-level focus.
 - SSH-remote sessions can't deliver Mac banners back (Tier 1: just bell + remote log).
 - First click triggers macOS Automation permission prompts; user must allow once.

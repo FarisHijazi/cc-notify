@@ -4,7 +4,8 @@ State snapshot for picking up later. See @README.md for user-facing docs, @LESSO
 
 ## Status
 
-- **Version**: 1.6.0 (pushed to `github.com/FarisHijazi/claude-plugins` marketplace + `github.com/FarisHijazi/cc-notify` standalone)
+- **Version**: 1.7.0 (standalone `github.com/FarisHijazi/cc-notify`; marketplace `github.com/FarisHijazi/claude-plugins` plugin.json still needs the bump on next push)
+- **v1.7.0 adds**: (a) Claude orange logo on the banner via `alerter --sender com.anthropic.claudefordesktop`; (b) exact integrated-terminal-pane focus for VS Code/Cursor via the new `editor-extension/` + `bin/cc-install-editor-extension`.
 - **Installed**: via marketplace, autoUpdate on. Live caches at `~/.claude/plugins/cache/farishijazi-plugins/cc-notify/{1.0.0,1.3.2,1.3.3,1.4.0}/` — all have been hand-patched to v1.6.0 scripts.
 - **Hotkey**: Karabiner-Elements rule binds `Option+Shift+A` → `bin/cc-banner-click`. Fires on key release (not key-down) with 150 ms settle delay + 800 ms debounce. Banner dismisses via `alerter --remove` only on successful focus.
 
@@ -12,19 +13,24 @@ State snapshot for picking up later. See @README.md for user-facing docs, @LESSO
 
 ```
 hooks/cc-notify.sh         Hook entry — parses JSON, gates Stop, writes route file, spawns bg worker, exits <100ms.
-hooks/cc-notify-bg.sh      Detached worker — blocks on alerter (120s timeout), on click invokes cc-focus.sh.
-hooks/cc-focus.sh          Click handler — focuses target window via Aerospace, switches tmux.
+hooks/cc-notify-bg.sh      Detached worker — blocks on alerter (120s timeout), on click invokes cc-focus.sh. Adds --sender for Claude icon.
+hooks/cc-focus.sh          Click handler — focuses target window via Aerospace, switches tmux, focuses VS Code/Cursor terminal pane.
 hooks/cc-capture-window.sh Captures Aerospace focused window-id at SessionStart + UserPromptSubmit → /tmp/cc-notify/<sid>.window.
 bin/cc-banner-click        Hotkey handler — finds latest live banner, runs cc-focus.sh, dismisses alerter on success.
+bin/cc-install-editor-extension  Symlinks editor-extension/ into ~/.vscode/extensions + ~/.cursor/extensions.
+editor-extension/          VS Code/Cursor extension: vscode://farishijazi.cc-notify-focus/focus?pids=… handler → terminal.show().
 ```
 
 State files in `/tmp/cc-notify/`:
-- `<session_id>.route` — captured context (term, tmux_target, client_tty, cwd, gui_pid, target_wid)
+- `<session_id>.route` — captured context (term, tmux_target, client_tty, cwd, tmux_socket, gui_pid, target_wid, editor_app, shell_pids)
 - `<session_id>.window` — Aerospace window-id captured by cc-capture-window.sh
+- `cc-notify-focus.last` (in `$TMPDIR`) — extension breadcrumb: what the last focus URI matched (pid/name or "no match").
 
 ## Decisions / non-obvious mechanics
 
 - **Window detection precedence**: captured `target_wid` (from cc-capture-window.sh) > `gui_pid` walk > AppleScript-by-tty (Terminal.app) > **VS Code/Cursor workspace-folder match by walking up cwd** (v1.6.0) > `open -a` last resort. Never `--reuse-window` (it opens cwd as a sub-view).
+- **VS Code/Cursor terminal-pane focus** (v1.7.0): after window focus, `cc-focus.sh:focus_vscode_terminal()` fires `open "<vscode|cursor>://farishijazi.cc-notify-focus/focus?pids=$shell_pids"` — but only if the extension dir exists (else the editor pops a "not installed" toast). Scheme picked from `editor_app` (captured) or the focused window's Aerospace app-name. `shell_pids` = hook's ancestor PPID chain **plus** every pid on `client_tty` (the latter covers tmux-inside-editor, where the editor's shell == tmux client shell is a *sibling*, not an ancestor). Extension matches by `Terminal.processId ∈ shell_pids`, then `.show()`. See @LESSONS.md gotcha #13.
+- **Claude logo on banner** (v1.7.0): `--sender com.anthropic.claudefordesktop` (icon override only works via sender impersonation on Big Sur+, not `--app-icon`). Guarded on `/Applications/Claude.app` existing. See @LESSONS.md #14.
 - **Stop gating**: only suppresses if the captured target window is currently Aerospace-focused. App-level frontmost check is a fallback when no Aerospace + no gui_pid.
 - **PPID walk first, then tty walks**: handles both non-tmux (`$TMUX` not set or stripped) and tmux-attached (PPID hits launchd-parented server). See @LESSONS.md gotcha #11 about multi-client tmux iteration.
 - **Hotkey fires on key release**: prevents key-repeat from cycling through all live banners. Plus 800ms script-level debounce.
@@ -33,7 +39,7 @@ State files in `/tmp/cc-notify/`:
 ## Known issues to pick up
 
 1. **tmux-watch monitor clients** — see @TODO.md. Sessions with only monitor clients (no real Terminal attached) can't be focused. Options: (a) skip monitor-client ttys when iterating, (b) spawn new Terminal as fallback, (c) refactor tmux-watch to mark its clients.
-2. **VS Code / Cursor pane focus** — can't target a specific integrated terminal pane (no API). Window-level match works; user still finds the pane by eye.
+2. **VS Code / Cursor pane focus** — SOLVED in v1.7.0 via the `editor-extension/` (`terminal.show()` matched by shell pid). Requires the extension installed + window reloaded. Without it, falls back to window-level focus only (the URI is suppressed when the extension dir is absent).
 3. **Two Cursor windows with the same workspace basename** — workspace-folder-basename matching picks the first one. Rare. Could disambiguate via `cursor --status` window list if it becomes an issue.
 
 ## Karabiner config
@@ -61,5 +67,6 @@ aerospace list-windows --focused --format '%{window-id}|%{app-name}|%{window-tit
 ## What to verify on resume
 
 1. **Cursor click-back lands on the right workspace window** (v1.6.0 workspace-folder match). Test by clicking from a Claude session whose cwd is a subdir of an open Cursor workspace — should focus that workspace's window, not re-open the subdir.
-2. **Stop suppression works correctly in side-by-side layouts** (already verified for Terminal.app, untested for Cursor).
-3. **autoUpdate pulls v1.6.0 cache** — currently the cache dirs are 1.0.0–1.4.0; v1.5.0/v1.6.0 will arrive on next session start with autoUpdate. All existing caches have been hand-patched.
+2. **Terminal-pane focus (v1.7.0)** — install the extension (`bin/cc-install-editor-extension`), reload the editor window, then fire `open "cursor://farishijazi.cc-notify-focus/focus?pids=<shell_pids from route>"` and check `$TMPDIR/cc-notify-focus.last` says `matched pid=…`. Confirm the *exact* pane (with multiple terminals open + tmux inside it) gets focus, not just the panel.
+3. **Stop suppression works correctly in side-by-side layouts** (already verified for Terminal.app, untested for Cursor).
+4. **autoUpdate pulls latest cache** — currently the cache dirs are 1.0.0–1.4.0; newer versions arrive on next session start with autoUpdate. All existing caches have been hand-patched.

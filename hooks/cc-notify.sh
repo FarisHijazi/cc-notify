@@ -54,8 +54,8 @@ _try_walk_tty() {
       */Terminal|Terminal)              [ "$term" = "tmux" ] && term="Apple_Terminal"; gui_pid="$pid"; client_tty="$candidate_tty"; return 0 ;;
       */iTerm2|iTerm2|*/iTerm|iTerm)    [ "$term" = "tmux" ] && term="iTerm.app";      gui_pid="$pid"; client_tty="$candidate_tty"; return 0 ;;
       */Ghostty|Ghostty|*/ghostty|ghostty) [ "$term" = "tmux" ] && term="ghostty";     gui_pid="$pid"; client_tty="$candidate_tty"; return 0 ;;
-      */Cursor|Cursor)                  [ "$term" = "tmux" ] && term="vscode";         gui_pid="$pid"; client_tty="$candidate_tty"; return 0 ;;
-      */Code\ Helper*|*/Electron|*/Code|Code) [ "$term" = "tmux" ] && term="vscode";   gui_pid="$pid"; client_tty="$candidate_tty"; return 0 ;;
+      */Cursor|Cursor)                  [ "$term" = "tmux" ] && term="vscode"; editor_app="Cursor"; gui_pid="$pid"; client_tty="$candidate_tty"; return 0 ;;
+      */Code\ Helper*|*/Electron|*/Code|Code) [ "$term" = "tmux" ] && term="vscode"; editor_app="Code"; gui_pid="$pid"; client_tty="$candidate_tty"; return 0 ;;
     esac
     pid=$(ps -o ppid= -p "$pid" 2>/dev/null | tr -d ' ')
     hops=$((hops + 1))
@@ -64,6 +64,21 @@ _try_walk_tty() {
 }
 
 gui_pid=""
+editor_app=""
+
+# Capture the ancestor PID chain of this hook. For VS Code / Cursor, the
+# integrated terminal's shell PID (== Terminal.processId) is always one of these,
+# so the editor extension can focus the exact terminal pane on click. PIDs are
+# unique per live process, so an ancestor PID can only match the terminal we
+# actually came from — never a sibling terminal.
+shell_pids=""
+_p=$$
+_h=0
+while [ -n "$_p" ] && [ "$_p" != "1" ] && [ "$_h" -lt 30 ]; do
+  shell_pids="${shell_pids:+$shell_pids,}$_p"
+  _p=$(ps -o ppid= -p "$_p" 2>/dev/null | tr -d ' ')
+  _h=$((_h + 1))
+done
 
 # Primary: walk PPID from our own process up. Works when claude is run
 # directly from a terminal shell (no tmux, or tmux env got stripped along
@@ -78,8 +93,8 @@ while [ -n "$_my_pid" ] && [ "$_my_pid" != "1" ] && [ "$_hops" -lt 30 ]; do
     */Terminal|Terminal)              [ "$term" = "tmux" ] && term="Apple_Terminal"; gui_pid="$_my_pid"; break ;;
     */iTerm2|iTerm2|*/iTerm|iTerm)    [ "$term" = "tmux" ] && term="iTerm.app";      gui_pid="$_my_pid"; break ;;
     */Ghostty|Ghostty|*/ghostty|ghostty) [ "$term" = "tmux" ] && term="ghostty";     gui_pid="$_my_pid"; break ;;
-    */Cursor|Cursor)                  [ "$term" = "tmux" ] && term="vscode";         gui_pid="$_my_pid"; break ;;
-    */Code\ Helper*|*/Electron|*/Code|Code) [ "$term" = "tmux" ] && term="vscode";   gui_pid="$_my_pid"; break ;;
+    */Cursor|Cursor)                  [ "$term" = "tmux" ] && term="vscode"; editor_app="Cursor"; gui_pid="$_my_pid"; break ;;
+    */Code\ Helper*|*/Electron|*/Code|Code) [ "$term" = "tmux" ] && term="vscode"; editor_app="Code"; gui_pid="$_my_pid"; break ;;
   esac
   _my_pid=$(ps -o ppid= -p "$_my_pid" 2>/dev/null | tr -d ' ')
   _hops=$((_hops + 1))
@@ -140,6 +155,17 @@ if [ "$event_kind" = "stop" ]; then
   fi
 fi
 
+# When Claude runs in tmux inside VS Code/Cursor, the integrated terminal's shell
+# (== Terminal.processId) is the tmux *client's* shell — a sibling of our process
+# tree, not an ancestor (our chain hits the launchd-parented tmux server). But it
+# lives on client_tty, so add every pid on that tty to the candidate set.
+shell_pids_all="$shell_pids"
+if [ -n "$client_tty" ]; then
+  for _tp in $(ps -t "${client_tty#/dev/}" -o pid= 2>/dev/null); do
+    shell_pids_all="${shell_pids_all:+$shell_pids_all,}$_tp"
+  done
+fi
+
 # Persist routing payload for the click handler.
 route_file="$state_dir/${session_id:-default}.route"
 {
@@ -150,6 +176,8 @@ route_file="$state_dir/${session_id:-default}.route"
   printf 'tmux_socket=%q\n' "${TMUX%%,*}"
   printf 'gui_pid=%q\n' "$gui_pid"
   printf 'target_wid=%q\n' "$target_wid"
+  printf 'editor_app=%q\n' "$editor_app"
+  printf 'shell_pids=%q\n' "$shell_pids_all"
 } >"$route_file" 2>/dev/null
 
 # Build notification copy.

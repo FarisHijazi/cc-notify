@@ -65,6 +65,17 @@ else
   ok "created kill-switch $sentinel — Stop notifications start disabled"
 fi
 
+# --- 4b. Editor extension (optional) -----------------------------------------
+# Enables focusing the exact VS Code / Cursor integrated terminal pane on click.
+if [ -d "$HOME/.vscode" ] || [ -d "$HOME/.cursor" ]; then
+  say "Installing cc-notify-focus editor extension..."
+  if bash "$repo_dir/bin/cc-install-editor-extension"; then
+    ok "editor extension linked — reload the editor window to activate"
+  else
+    warn "editor extension install skipped (non-fatal)"
+  fi
+fi
+
 # --- 5. Routing state dir -----------------------------------------------------
 mkdir -p /tmp/cc-notify
 ok "ready"
