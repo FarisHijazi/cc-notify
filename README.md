@@ -92,13 +92,19 @@ apart — and see their state — at a glance. The status emoji tracks the sessi
 | done — your turn | 👀 |
 | task complete | ✅ |
 | task failed | ❌ |
+| good news | 👍 |
+| bad news | 👎 |
 | replied / other | 💬 |
 
-The done state can reflect the actual **outcome** (✅/❌/💬) if you instruct Claude
-to end each message with a trailing status emoji — add to your `~/.claude/CLAUDE.md`:
+The done state can reflect the actual **outcome** (✅/❌/👍/👎/💬) if you instruct
+Claude to end each message with a trailing status emoji — add to your
+`~/.claude/CLAUDE.md`:
 
-> End every response with three spaces, then one of `✅` (task completed),
-> `❌` (failed), or `💬` (other). Nothing after it.
+> End every response with three spaces, then one of: `✅` task completed / `❌`
+> failed / `👍` good news / `👎` bad news / `💬` neutral. Nothing after it.
+
+(✅/❌ for task outcomes; 👍/👎 when there's no task but clearly good/bad news;
+💬 when neither.)
 
 cc-notify reads that trailing emoji from the transcript on `Stop`. Without it, the
 done state is just 👀 "your turn".

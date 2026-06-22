@@ -25,7 +25,9 @@ cc_status_emoji() {
     idle|done)   printf '👀' ;;   # Stop — turn complete, your turn
     success)     printf '✅' ;;   # last message ended with ✅ (task done)
     failure)     printf '❌' ;;   # last message ended with ❌ (task failed)
-    other)       printf '💬' ;;   # last message ended with 💬 (replied / no task outcome)
+    good)        printf '👍' ;;   # last message ended with 👍 (good news, no task outcome)
+    bad)         printf '👎' ;;   # last message ended with 👎 (bad news, no task outcome)
+    other)       printf '💬' ;;   # last message ended with 💬 (neutral reply / no outcome)
     *)           printf '' ;;
   esac
 }
@@ -48,7 +50,7 @@ for(let i=lines.length-1;i>=0;i--){
   const text=j.message.content.filter(b=>b&&b.type==="text").map(b=>b.text).join("");
   if(!text.trim()) continue;                 // skip tool-only turns
   const last=[...text.replace(/\s+$/,"")].pop()||"";
-  if(last==="✅"||last==="❌"||last==="💬") process.stdout.write(last);
+  if(["✅","❌","👍","👎","💬"].includes(last)) process.stdout.write(last);
   process.exit(0);                           // only the final message matters
 }
 ' "$tp" 2>/dev/null
@@ -93,7 +95,7 @@ cc_set_status() {
   CC_NEW="$emoji" node -e '
 const fs=require("fs"), f=process.argv[1];
 let d; try{ d=JSON.parse(fs.readFileSync(f,"utf8")); }catch(e){ process.exit(0); }
-const rest=(d.name||"").replace(/^(?:⏸️|⏳|🔐|❓|🔔|👀|✅|❌|💬|🗜️)\s*/u,"");
+const rest=(d.name||"").replace(/^(?:⏸️|⏳|🔐|❓|🔔|👀|✅|❌|👍|👎|💬|🗜️)\s*/u,"");
 const ne=process.env.CC_NEW||"";
 const name=ne?ne+" "+rest:rest;
 if(name===d.name) process.exit(0);

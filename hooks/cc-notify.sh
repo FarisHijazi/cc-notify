@@ -177,6 +177,8 @@ else
   case "$status_emoji" in
     ✅) subtitle="Task complete" ;;
     ❌) subtitle="Task failed" ;;
+    👍) subtitle="Good news" ;;
+    👎) subtitle="Bad news" ;;
     *)  subtitle="Turn complete" ;;
   esac
   body="$cwd_basename"
