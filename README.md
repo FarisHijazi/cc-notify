@@ -80,11 +80,21 @@ cc-notify reflects two pieces of Claude Code session identity:
 
 **Terminal tab renaming** (needs the [editor extension](#optional-focus-the-exact-vs-code--cursor-terminal-pane)):
 on VS Code / Cursor, cc-notify renames the integrated terminal tab to
-`<color-emoji> <session name>` (e.g. `🟠 cc-notify`) so you can tell sessions apart
-at a glance. It fires in the background (`open -g` — never steals focus) and only
-renames when Claude's terminal is the active one, so it can't disturb you. Native
-tab *color* isn't settable by any VS Code API, so the color rides along as the
-emoji prefix.
+`<status> <color> <session name>` (e.g. `👀 🟠 cc-notify`) so you can tell sessions
+apart — and see their state — at a glance. The status emoji tracks the session:
+
+| State | Emoji |
+|---|---|
+| fresh session (startup) | ⏸️ |
+| working | ⏳ |
+| needs your input | 🔔 |
+| done — your turn | 👀 |
+
+It's driven by a state file the extension watches (`/tmp/cc-notify/<sid>.tab`) —
+**no `open`/URL**, because opening a URL scheme activates the editor and steals
+focus across spaces. The extension renames via the terminal API without raising the
+window, so it never disturbs you. Native tab *color* isn't settable by any VS Code
+API, so the color rides along as the emoji prefix.
 
 ## Toggle Stop notifications
 

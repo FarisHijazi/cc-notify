@@ -16,9 +16,12 @@ cc_color_emoji() {
 # never status — keep the two vocabularies distinct.)
 cc_status_emoji() {
   case "$1" in
+    startup)     printf '⏸️' ;;   # SessionStart — fresh session, no turn yet
     running)     printf '⏳' ;;   # UserPromptSubmit — Claude is working
     needs_input) printf '🔔' ;;   # Notification — wants input/permission
-    idle|done)   printf '✅' ;;   # Stop — turn complete, waiting for you
+    idle|done)   printf '👀' ;;   # Stop — turn complete, your turn
+    success)     printf '✅' ;;   # reserved (future: turn succeeded)
+    failure)     printf '❌' ;;   # reserved (future: turn failed)
     *)           printf '' ;;
   esac
 }

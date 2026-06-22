@@ -43,13 +43,13 @@ if command -v aerospace >/dev/null 2>&1; then
   esac
 fi
 
-# 2. Status tab: SessionStart → ✅ idle, UserPromptSubmit → ⏳ running. Reuses the
+# 2. Status tab: SessionStart → ⏸️ startup, UserPromptSubmit → ⏳ running. Reuses the
 # editor/pids cc-notify.sh captured on a prior turn (route file); the first prompt
 # of a session has no route yet, so it gets named on the first turn-end instead.
 status=""
 case "$event" in
   UserPromptSubmit) status=running ;;
-  SessionStart)     status=idle ;;
+  SessionStart)     status=startup ;;
 esac
 if [ -n "$status" ]; then
   route="/tmp/cc-notify/${session_id}.route"
