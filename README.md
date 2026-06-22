@@ -87,16 +87,18 @@ apart — and see their state — at a glance. The status emoji tracks the sessi
 |---|---|
 | fresh session (startup) | ⏸️ |
 | working | ⏳ |
-| needs your input | 🔔 |
+| needs permission | 🔐 |
+| asking you / input | ❓ |
 | done — your turn | 👀 |
 | task complete | ✅ |
 | task failed | ❌ |
+| replied / other | 💬 |
 
-The done state can reflect the actual **outcome** (✅/❌/⭕) if you instruct Claude
+The done state can reflect the actual **outcome** (✅/❌/💬) if you instruct Claude
 to end each message with a trailing status emoji — add to your `~/.claude/CLAUDE.md`:
 
-> End every response with a newline, two spaces, then one of `✅` (task completed),
-> `❌` (failed), or `⭕` (other). Nothing after it.
+> End every response with three spaces, then one of `✅` (task completed),
+> `❌` (failed), or `💬` (other). Nothing after it.
 
 cc-notify reads that trailing emoji from the transcript on `Stop`. Without it, the
 done state is just 👀 "your turn".

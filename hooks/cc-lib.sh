@@ -24,7 +24,7 @@ cc_status_emoji() {
     idle|done)   printf '👀' ;;   # Stop — turn complete, your turn
     success)     printf '✅' ;;   # last message ended with ✅ (task done)
     failure)     printf '❌' ;;   # last message ended with ❌ (task failed)
-    other)        printf '⭕' ;;   # last message ended with ⭕ (question/partial)
+    other)       printf '💬' ;;   # last message ended with 💬 (replied / no task outcome)
     *)           printf '' ;;
   esac
 }
@@ -47,7 +47,7 @@ for(let i=lines.length-1;i>=0;i--){
   const text=j.message.content.filter(b=>b&&b.type==="text").map(b=>b.text).join("");
   if(!text.trim()) continue;                 // skip tool-only turns
   const last=[...text.replace(/\s+$/,"")].pop()||"";
-  if(last==="✅"||last==="❌"||last==="⭕") process.stdout.write(last);
+  if(last==="✅"||last==="❌"||last==="💬") process.stdout.write(last);
   process.exit(0);                           // only the final message matters
 }
 ' "$tp" 2>/dev/null
