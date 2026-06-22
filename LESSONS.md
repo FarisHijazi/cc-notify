@@ -156,10 +156,28 @@ PIDs are unique per live process, so an ancestor/tty pid can only ever match the
 
 Install unpacked by symlinking the folder into `~/.vscode/extensions/` and `~/.cursor/extensions/` (`bin/cc-install-editor-extension`); reload the window. `Terminal.processId` is a `Thenable<number>` (await it). `terminal.show(false)` reveals **and takes focus** (`true` would preserve focus elsewhere).
 
-## 14. Claude logo on the banner: impersonate the bundle id, don't set --app-icon
+## 14. Claude logo on the banner: impersonate the bundle id — but only if it's AUTHORIZED
 
 On modern macOS (Big Sur+) macOS ignores a notifier's custom icon and uses the
-**sending app's** icon. So `alerter --app-icon <path>` does nothing. The fix is
-`alerter --sender com.anthropic.claudefordesktop` — this impersonates `Claude.app`,
-so macOS draws Claude's orange logo. Requires `Claude.app` installed (no app → no
-icon override). Same trick Boris Buliga uses with `terminal-notifier -sender`.
+**sending app's** icon. So `alerter --app-icon <path>` does nothing. The icon can
+only be changed by impersonating a bundle id: `alerter --sender com.anthropic.claudefordesktop`
+draws Claude's orange logo (same trick as Boris Buliga's `terminal-notifier -sender`).
+
+**The trap:** macOS **silently drops** a notification whose `--sender` bundle id
+has no notification permission. `Claude.app` is usually unauthorized (people run
+the Claude Code CLI, not the desktop app — it's never launched, never granted
+notification permission). Result: every banner vanishes and you're left with only
+Claude Code's own `terminal_bell` (the `\a` you hear). No error, no banner — looks
+like cc-notify broke.
+
+Check authorization in `~/Library/Preferences/com.apple.ncprefs.plist` (the `apps`
+array, keyed by `bundle-id`, has a `flags` field; absent entirely = never
+authorized). An authorized app (Cursor `com.todesktop.230313mzl4w4u92`, ScriptEditor
+`com.apple.ScriptEditor2`) shows banners; `com.anthropic.claudefordesktop` was
+absent → dropped. `bin/cc-notify-doctor` flags this.
+
+So `--sender` is **opt-in** (`~/.claude/notify.claude_icon`); the default uses
+alerter's own authorized sender so banners always show. The always-on orange comes
+from `--content-image` instead (an attachment, no authorization needed). Don't
+confuse "alerter ran successfully" with "the banner showed" — auth-dropped
+notifications still exit 0.

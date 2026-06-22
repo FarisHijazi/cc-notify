@@ -107,11 +107,22 @@ rm ~/.claude/notify.suppress_when_focused    # always ping (default)
 
 ## Icon
 
-The banner shows the **orange Claude logo** (matching the Claude Code statusline
-accent) when `Claude.app` is installed — cc-notify impersonates its bundle id via
-`alerter --sender com.anthropic.claudefordesktop`. On modern macOS (Big Sur+) a
-custom `--app-icon` is ignored; sender impersonation is the only way to override
-the notification icon. Without `Claude.app`, the icon falls back to the default.
+The banner always carries an **orange Claude mark** as a right-side content image.
+
+The notification *icon* (left square) can only be overridden by impersonating an
+app's bundle id (`alerter --sender`); on modern macOS (Big Sur+) a custom
+`--app-icon` is ignored. Impersonating `com.anthropic.claudefordesktop` gives the
+orange Claude logo — **but macOS silently drops notifications sent under a bundle
+id that lacks notification permission, and `Claude.app` usually has none** (most
+people run the Claude Code CLI, not the desktop app). That kills the banner and
+leaves only the terminal bell. So the Claude icon is **opt-in**:
+
+```bash
+# 1. Launch Claude.app once and allow its notifications (System Settings → Notifications → Claude)
+# 2. then:
+touch ~/.claude/notify.claude_icon    # use the orange Claude logo as the icon
+rm   ~/.claude/notify.claude_icon     # back to the default authorized sender (reliable banners)
+```
 
 ## How it works
 

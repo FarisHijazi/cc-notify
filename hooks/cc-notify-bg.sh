@@ -6,13 +6,16 @@
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 alerter_bin="$(command -v alerter 2>/dev/null || echo /opt/homebrew/bin/alerter)"
 
-# Show the Claude logo (orange — matches the Claude Code statusline accent) as the
-# notification icon by impersonating Claude.app's bundle id. On modern macOS
-# (Big Sur+) custom --app-icon is ignored; impersonating the sender's bundle id
-# is the only way to override the icon. Guard so it degrades gracefully if
-# Claude.app isn't installed.
+# Notification icon: impersonating Claude.app's bundle id is the only way to get
+# the orange Claude logo as the icon (Big Sur+ ignores custom --app-icon). BUT
+# macOS SILENTLY DROPS notifications sent under a bundle id that lacks
+# notification permission — and Claude.app usually has none (most people use the
+# Claude Code CLI, not the desktop app), so impersonating it kills the banner and
+# leaves only the terminal bell. So this is OPT-IN: enable it only after you've
+# launched Claude.app once and allowed its notifications.
+#   touch ~/.claude/notify.claude_icon   # opt into the orange Claude icon
 sender_args=()
-if [ -d "/Applications/Claude.app" ]; then
+if [ -f "$HOME/.claude/notify.claude_icon" ] && [ -d "/Applications/Claude.app" ]; then
   sender_args=(--sender com.anthropic.claudefordesktop)
 fi
 
