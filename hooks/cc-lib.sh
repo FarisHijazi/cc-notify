@@ -17,7 +17,8 @@ cc_color_emoji() {
 cc_status_emoji() {
   case "$1" in
     startup)     printf '⏸️' ;;   # SessionStart — fresh session, no turn yet
-    running)     printf '⏳' ;;   # UserPromptSubmit — Claude is working
+    running)     printf '⏳' ;;   # UserPromptSubmit / tool use — Claude is working
+    compacting)  printf '🗜️' ;;   # PreCompact — compacting context
     permission)  printf '🔐' ;;   # Notification — needs permission to run a tool
     question)    printf '❓' ;;   # Notification — asking you / waiting for input
     needs_input) printf '🔔' ;;   # Notification — generic "needs you" fallback
@@ -78,6 +79,26 @@ cc_tab_name() {
     [ -n "$p" ] && out="${out:+$out }$p"
   done
   printf '%s' "$out"
+}
+
+# Cheaply swap just the leading status emoji on an existing <sid>.tab, WITHOUT
+# re-reading the (possibly huge) transcript. Used by high-frequency hooks
+# (PreToolUse/PostToolUse/etc.) so they stay fast — they only re-assert the state,
+# not recompute color/title. Empty emoji clears the status. No-op if the .tab
+# doesn't exist yet (a full update will create it). Args: sid status_emoji
+cc_set_status() {
+  local sid="$1" emoji="$2" f="/tmp/cc-notify/$1.tab"
+  [ -f "$f" ] || return 0
+  command -v node >/dev/null 2>&1 || return 0
+  CC_NEW="$emoji" node -e '
+const fs=require("fs"), f=process.argv[1];
+let d; try{ d=JSON.parse(fs.readFileSync(f,"utf8")); }catch(e){ process.exit(0); }
+const rest=(d.name||"").replace(/^(?:⏸️|⏳|🔐|❓|🔔|👀|✅|❌|💬|🗜️)\s*/u,"");
+const ne=process.env.CC_NEW||"";
+const name=ne?ne+" "+rest:rest;
+if(name===d.name) process.exit(0);
+try{ fs.writeFileSync(f, JSON.stringify({pids:d.pids,name:name})); }catch(e){}
+' "$f" 2>/dev/null
 }
 
 # Write the desired tab name + pids to a state file the editor extension watches

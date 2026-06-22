@@ -1,12 +1,19 @@
 #!/usr/bin/env bash
-# Fired by SessionStart + UserPromptSubmit.
-#  1. Captures the currently-focused Aerospace window id (the window the user is
-#     reliably looking at) → /tmp/cc-notify/<sid>.window, used to jump back later.
-#     This is the only robust way to identify the right window in editors like
-#     VS Code / Cursor, where one GUI process hosts many windows.
-#  2. On UserPromptSubmit, sets the integrated terminal tab status to ⏳ running
-#     (Stop later flips it to 💤, Notification to 🔔). Reuses the editor/pids
-#     captured by cc-notify.sh on a prior turn (in the route file).
+# Status updater + window capture. Registered on many hooks (see hooks.json) so
+# the terminal-tab status stays current and self-heals.
+#
+#   SessionStart      → ⏸️ startup   (FULL: capture window + grep color/title)
+#   UserPromptSubmit  → ⏳ running    (FULL: capture window + grep color/title)
+#   PreToolUse        → ⏳ running    (cheap: swap status emoji on existing .tab)
+#   PostToolUse       → ⏳ running    (cheap)
+#   SubagentStop      → ⏳ running    (cheap — main turn continues)
+#   PreCompact        → 🗜️ compacting (cheap)
+#   SessionEnd        → (clear)      (cheap: drop the status emoji)
+#
+# "FULL" updates re-read the transcript (for color/title) and only run on the two
+# events where the user is reliably looking at the window. The "cheap" updates
+# only re-write the leading status emoji on the existing .tab — no transcript
+# grep, no aerospace call — so they stay fast even firing on every tool call.
 
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck disable=SC1091
@@ -29,29 +36,30 @@ let d="";process.stdin.on("data",c=>d+=c).on("end",()=>{
 
 mkdir -p /tmp/cc-notify 2>/dev/null
 
-# 1. Capture focused window id — but ONLY if it belongs to a terminal/editor app.
-# Sessions that drive other apps (e.g. Chrome via browser automation) would
-# otherwise capture that app's window as the jump-back target, so clicking the
-# notification focuses Chrome instead of the terminal. Whitelist real hosts.
-if command -v aerospace >/dev/null 2>&1; then
-  line=$(aerospace list-windows --focused --format '%{window-id}|%{app-name}' 2>/dev/null)
-  wid="${line%%|*}"; fapp="${line#*|}"
-  case "$fapp" in
-    Cursor|Code|"Visual Studio Code"|"Code - Insiders"|Terminal|iTerm2|iTerm|Ghostty|Alacritty|kitty|WezTerm)
-      [ -n "$wid" ] && printf '%s' "$wid" > "/tmp/cc-notify/${session_id}.window" ;;
-    *) : ;;  # focused window isn't a terminal/editor — keep the previous capture
-  esac
-fi
-
-# 2. Status tab: SessionStart → ⏸️ startup, UserPromptSubmit → ⏳ running. Reuses the
-# editor/pids cc-notify.sh captured on a prior turn (route file); the first prompt
-# of a session has no route yet, so it gets named on the first turn-end instead.
-status=""
+# Map the event → status, and whether it needs a FULL (grep) update.
+status="" full=0
 case "$event" in
-  UserPromptSubmit) status=running ;;
-  SessionStart)     status=startup ;;
+  SessionStart)                          status=startup;    full=1 ;;
+  UserPromptSubmit)                      status=running;    full=1 ;;
+  PreToolUse|PostToolUse|SubagentStop)   status=running ;;
+  PreCompact)                            status=compacting ;;
+  SessionEnd)                            status=ended ;;
 esac
-if [ -n "$status" ]; then
+[ -z "$status" ] && exit 0
+
+if [ "$full" = 1 ]; then
+  # Capture the focused window id — but ONLY if it's a terminal/editor app, so a
+  # session driving Chrome doesn't capture Chrome as the jump-back target.
+  if command -v aerospace >/dev/null 2>&1; then
+    line=$(aerospace list-windows --focused --format '%{window-id}|%{app-name}' 2>/dev/null)
+    wid="${line%%|*}"; fapp="${line#*|}"
+    case "$fapp" in
+      Cursor|Code|"Visual Studio Code"|"Code - Insiders"|Terminal|iTerm2|iTerm|Ghostty|Alacritty|kitty|WezTerm)
+        [ -n "$wid" ] && printf '%s' "$wid" > "/tmp/cc-notify/${session_id}.window" ;;
+    esac
+  fi
+  # Fresh status .tab: needs routing (term/shell_pids from a prior cc-notify turn)
+  # + color/title from the transcript. Detached so the hook returns fast.
   route="/tmp/cc-notify/${session_id}.route"
   if [ -f "$route" ]; then
     term="" shell_pids=""
@@ -60,8 +68,15 @@ if [ -n "$status" ]; then
     if [ "$term" = "vscode" ] && [ -n "$shell_pids" ]; then
       cc_session_meta "$transcript_path" "$(basename "${cwd:-$PWD}")"
       name=$(cc_tab_name "$(cc_status_emoji "$status")" "$CC_COLOR_EMOJI" "$CC_TITLE")
-      cc_write_tab "$session_id" "$shell_pids" "$name"
+      ( cc_write_tab "$session_id" "$shell_pids" "$name" </dev/null >/dev/null 2>&1 & )
     fi
+  fi
+else
+  # Cheap: just re-write the leading status emoji on the existing .tab. Detached.
+  if [ "$status" = "ended" ]; then
+    ( cc_set_status "$session_id" "" </dev/null >/dev/null 2>&1 & )
+  else
+    ( cc_set_status "$session_id" "$(cc_status_emoji "$status")" </dev/null >/dev/null 2>&1 & )
   fi
 fi
 exit 0
