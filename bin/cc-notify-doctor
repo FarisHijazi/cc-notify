@@ -1,0 +1,63 @@
+#!/usr/bin/env bash
+# cc-notify-doctor — diagnose "no notifications" + benchmark the capture calls.
+# Usage: bin/cc-notify-doctor   (run from anywhere; it fires one real test banner)
+
+bold() { printf '\033[1m%s\033[0m\n' "$*"; }
+ms() {
+  # Time a command N times, print min/median/max in ms. Uses bash TIMEFORMAT.
+  local label="$1"; shift
+  local n=5 i t times=() ; local TIMEFORMAT='%R'
+  for ((i=0;i<n;i++)); do
+    t=$({ time "$@" >/dev/null 2>&1; } 2>&1)
+    times+=("$t")
+  done
+  printf '%s\n' "${times[@]}" | sort -n | awk -v l="$label" '
+    {a[NR]=$1}
+    END{ printf "  %-42s min %5.0fms  med %5.0fms  max %5.0fms\n",
+         l, a[1]*1000, a[int((NR+1)/2)]*1000, a[NR]*1000 }'
+}
+
+bold "== 1. Gates (any of these silences notifications) =="
+for f in notify.disable_stop notify.suppress_when_focused; do
+  if [ -f "$HOME/.claude/$f" ]; then echo "  ⚠️  ~/.claude/$f EXISTS"; else echo "  ok  ~/.claude/$f absent"; fi
+done
+
+bold "== 2. macOS Focus / Do Not Disturb =="
+dnd=$(defaults -currentHost read ~/Library/Preferences/ByHost/com.apple.notificationcenterui doNotDisturb 2>/dev/null)
+echo "  doNotDisturb(legacy)=${dnd:-unknown}  (alerter passes --ignore-dnd, but Focus modes can still gate)"
+
+bold "== 3. Live plugin scripts present + valid =="
+for d in "$HOME/.claude/plugins/cache/farishijazi-plugins/cc-notify"/*/ \
+         "$HOME/.claude/plugins/marketplaces/farishijazi-plugins/plugins/cc-notify/"; do
+  [ -d "$d" ] || continue
+  s="$d/hooks/cc-notify.sh"
+  if [ -f "$s" ]; then bash -n "$s" 2>/dev/null && echo "  ok  $s" || echo "  ✗ SYNTAX ERROR $s"; fi
+done
+
+bold "== 4. alerter present + how many live now =="
+echo "  bin: $(command -v alerter || echo MISSING)"
+echo "  live alerter procs: $(pgrep -c -f '[a]lerter' 2>/dev/null || echo 0)"
+
+bold "== 5. Capture-call timings (the latency hypothesis) =="
+ms "ps -axo pid,ppid,comm (full table)"  ps -axo pid,ppid,comm
+command -v tmux >/dev/null && ms "tmux list-clients" tmux list-clients
+if command -v aerospace >/dev/null; then
+  ms "aerospace list-windows --focused"     aerospace list-windows --focused --format '%{window-id}'
+  ms "aerospace list-windows --monitor all" aerospace list-windows --monitor all --format '%{window-id}'
+fi
+echo "  node -e 0 (interp startup, x per hook):"
+ms "node -e 0" node -e 0
+
+bold "== 6. End-to-end: fire ONE real banner via the live plugin =="
+plugin=$(ls -d "$HOME/.claude/plugins/cache/farishijazi-plugins/cc-notify"/*/ 2>/dev/null | tail -1)
+plugin="${plugin%/}"
+if [ -n "$plugin" ]; then
+  echo '{"session_id":"doctor","cwd":"'"$PWD"'","message":"doctor test — do you see this banner?"}' \
+    | CLAUDE_PLUGIN_ROOT="$plugin" bash "$plugin/hooks/cc-notify.sh" notification
+  echo "  fired (exit $?). A banner should appear within ~1s. Route:"
+  sleep 0.4
+  [ -f /tmp/cc-notify/doctor.route ] && echo "  ✓ route written" || echo "  ✗ NO route — hook bailed early"
+  echo "  → If no banner appears but route is written, the issue is macOS NotificationCenter (Focus/throttle), not cc-notify."
+else
+  echo "  ✗ no plugin cache dir found"
+fi
