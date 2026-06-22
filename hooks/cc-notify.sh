@@ -214,9 +214,17 @@ if [ "$event_kind" = "notification" ]; then
   subtitle="Awaiting your input"
   body="${message:-Claude needs you}"
 else
-  status_emoji=$(cc_status_emoji idle)          # 💤
+  # Outcome from the trailing ✅/❌/⭕ in Claude's last message (per global
+  # CLAUDE.md); fall back to 👀 "your turn" if no token is present.
+  status_emoji=$(cc_last_status_token "$transcript_path")
+  [ -z "$status_emoji" ] && status_emoji=$(cc_status_emoji idle)
   sound="Hero"
-  subtitle="Turn complete"
+  case "$status_emoji" in
+    ✅) subtitle="Task complete" ;;
+    ❌) subtitle="Task failed" ;;
+    ⭕) subtitle="Turn complete" ;;
+    *)  subtitle="Turn complete" ;;
+  esac
   body="$cwd_basename"
   [ -n "$git_branch" ] && body="$cwd_basename · $git_branch"
 fi

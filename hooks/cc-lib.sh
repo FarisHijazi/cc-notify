@@ -20,10 +20,35 @@ cc_status_emoji() {
     running)     printf '⏳' ;;   # UserPromptSubmit — Claude is working
     needs_input) printf '🔔' ;;   # Notification — wants input/permission
     idle|done)   printf '👀' ;;   # Stop — turn complete, your turn
-    success)     printf '✅' ;;   # reserved (future: turn succeeded)
-    failure)     printf '❌' ;;   # reserved (future: turn failed)
+    success)     printf '✅' ;;   # last message ended with ✅ (task done)
+    failure)     printf '❌' ;;   # last message ended with ❌ (task failed)
+    other)        printf '⭕' ;;   # last message ended with ⭕ (question/partial)
     *)           printf '' ;;
   esac
+}
+
+# Outcome token: Claude is instructed (global CLAUDE.md) to end every message with
+# a trailing ✅/❌/⭕. Read the LAST text-bearing assistant message from the
+# transcript and echo that trailing emoji (or nothing). Used to show real
+# success/failure on Stop instead of the generic "your turn".
+cc_last_status_token() {
+  local tp="$1"
+  [ -n "$tp" ] && [ -f "$tp" ] || return 0
+  command -v node >/dev/null 2>&1 || return 0
+  node -e '
+const fs=require("fs");
+let lines; try{ lines=fs.readFileSync(process.argv[1],"utf8").split("\n"); }catch(e){ process.exit(0); }
+for(let i=lines.length-1;i>=0;i--){
+  const l=lines[i]; if(!l) continue;
+  let j; try{ j=JSON.parse(l); }catch(e){ continue; }
+  if(j.type!=="assistant" || !j.message || !Array.isArray(j.message.content)) continue;
+  const text=j.message.content.filter(b=>b&&b.type==="text").map(b=>b.text).join("");
+  if(!text.trim()) continue;                 // skip tool-only turns
+  const last=[...text.replace(/\s+$/,"")].pop()||"";
+  if(last==="✅"||last==="❌"||last==="⭕") process.stdout.write(last);
+  process.exit(0);                           // only the final message matters
+}
+' "$tp" 2>/dev/null
 }
 
 # Read agentColor + session title from a transcript JSONL in one pass.
