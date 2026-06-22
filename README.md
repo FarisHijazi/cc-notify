@@ -70,14 +70,24 @@ The extension ([`editor-extension/`](./editor-extension/)) registers a
 
 ## Toggle Stop notifications
 
-`Stop` fires on every assistant turn end — noisy if you're actively iterating. Two gates:
+`Stop` fires the moment Claude is **fully done** — after every subagent has
+returned and the final response is written (background shells/watchers don't hold
+the turn open). cc-notify fires on it **immediately** rather than relying on Claude
+Code's ~60s idle Notification, so "done" pings are instant. Two opt-outs, both off
+by default:
 
-1. **Auto-suppression**: skipped when the originating terminal app is currently frontmost.
-2. **Global kill-switch**: while `~/.claude/notify.disable_stop` exists, Stop never fires.
+1. **Global kill-switch**: while `~/.claude/notify.disable_stop` exists, Stop never fires.
+2. **Suppress when focused** (opt-in): while `~/.claude/notify.suppress_when_focused`
+   exists, Stop is skipped when the originating window is already frontmost. Off by
+   default — the frontmost detection is unreliable in VS Code/Cursor and was eating
+   legitimate pings.
 
 ```bash
-touch ~/.claude/notify.disable_stop    # silence Stop
-rm ~/.claude/notify.disable_stop       # re-enable
+touch ~/.claude/notify.disable_stop          # silence Stop entirely
+rm ~/.claude/notify.disable_stop             # re-enable
+
+touch ~/.claude/notify.suppress_when_focused # don't ping the window you're on
+rm ~/.claude/notify.suppress_when_focused    # always ping (default)
 ```
 
 `Notification` events (input requests) always fire — those are the high-signal ones.

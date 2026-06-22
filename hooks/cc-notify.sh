@@ -128,30 +128,43 @@ cwd_basename=$(basename "${cwd:-$PWD}")
 git_branch=$(git -C "${cwd:-$PWD}" symbolic-ref --short HEAD 2>/dev/null)
 
 # Stop event gating.
+#
+# Stop fires the moment Claude is fully done — after all subagents have returned
+# and the final response is written (background shells/watchers don't hold the
+# turn open). So we treat Stop as the authoritative "done" signal and fire
+# immediately, rather than relying on Claude Code's ~60s idle Notification.
+#
+# Two opt-out gates, both off by default:
+#   notify.disable_stop          — kill-switch: never fire Stop.
+#   notify.suppress_when_focused — only then suppress Stop when the originating
+#                                  window is already frontmost. Off by default
+#                                  because the frontmost detection is unreliable
+#                                  in VS Code/Cursor (it ate legitimate pings).
 if [ "$event_kind" = "stop" ]; then
   # Kill-switch sentinel.
   [ -f "$HOME/.claude/notify.disable_stop" ] && exit 0
 
-  # Window-level frontmost check. Prefer the captured target_wid (most
-  # reliable, especially for editors); fall back to gui_pid-based lookup;
-  # final fallback is app-level frontmost (only used when Aerospace is
-  # unavailable or no window was captured).
-  if command -v aerospace >/dev/null 2>&1; then
-    focused_wid=$(aerospace list-windows --focused --format '%{window-id}' 2>/dev/null)
-    claude_wid="$target_wid"
-    [ -z "$claude_wid" ] && [ -n "$gui_pid" ] \
-      && claude_wid=$(aerospace list-windows --monitor all --pid "$gui_pid" --format '%{window-id}' 2>/dev/null | head -1)
-    if [ -n "$claude_wid" ] && [ "$claude_wid" = "$focused_wid" ]; then
-      exit 0
+  # Opt-in frontmost suppression. Prefer the captured target_wid (most reliable,
+  # especially for editors); fall back to gui_pid-based lookup; final fallback is
+  # app-level frontmost (only when Aerospace is unavailable or no window captured).
+  if [ -f "$HOME/.claude/notify.suppress_when_focused" ]; then
+    if command -v aerospace >/dev/null 2>&1; then
+      focused_wid=$(aerospace list-windows --focused --format '%{window-id}' 2>/dev/null)
+      claude_wid="$target_wid"
+      [ -z "$claude_wid" ] && [ -n "$gui_pid" ] \
+        && claude_wid=$(aerospace list-windows --monitor all --pid "$gui_pid" --format '%{window-id}' 2>/dev/null | head -1)
+      if [ -n "$claude_wid" ] && [ "$claude_wid" = "$focused_wid" ]; then
+        exit 0
+      fi
+    else
+      frontmost=$(osascript -e 'tell application "System Events" to name of first application process whose frontmost is true' 2>/dev/null)
+      case "$term" in
+        Apple_Terminal) [ "$frontmost" = "Terminal" ] && exit 0 ;;
+        vscode)         [ "$frontmost" = "Code" ] || [ "$frontmost" = "Cursor" ] && exit 0 ;;
+        iTerm.app)      [ "$frontmost" = "iTerm2" ] || [ "$frontmost" = "iTerm" ] && exit 0 ;;
+        ghostty)        [ "$frontmost" = "ghostty" ] || [ "$frontmost" = "Ghostty" ] && exit 0 ;;
+      esac
     fi
-  else
-    frontmost=$(osascript -e 'tell application "System Events" to name of first application process whose frontmost is true' 2>/dev/null)
-    case "$term" in
-      Apple_Terminal) [ "$frontmost" = "Terminal" ] && exit 0 ;;
-      vscode)         [ "$frontmost" = "Code" ] || [ "$frontmost" = "Cursor" ] && exit 0 ;;
-      iTerm.app)      [ "$frontmost" = "iTerm2" ] || [ "$frontmost" = "iTerm" ] && exit 0 ;;
-      ghostty)        [ "$frontmost" = "ghostty" ] || [ "$frontmost" = "Ghostty" ] && exit 0 ;;
-    esac
   fi
 fi
 
