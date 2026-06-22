@@ -18,7 +18,9 @@ cc_status_emoji() {
   case "$1" in
     startup)     printf '⏸️' ;;   # SessionStart — fresh session, no turn yet
     running)     printf '⏳' ;;   # UserPromptSubmit — Claude is working
-    needs_input) printf '🔔' ;;   # Notification — wants input/permission
+    permission)  printf '🔐' ;;   # Notification — needs permission to run a tool
+    question)    printf '❓' ;;   # Notification — asking you / waiting for input
+    needs_input) printf '🔔' ;;   # Notification — generic "needs you" fallback
     idle|done)   printf '👀' ;;   # Stop — turn complete, your turn
     success)     printf '✅' ;;   # last message ended with ✅ (task done)
     failure)     printf '❌' ;;   # last message ended with ❌ (task failed)

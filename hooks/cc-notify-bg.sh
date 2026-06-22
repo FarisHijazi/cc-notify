@@ -4,14 +4,9 @@
 # Runs alerter blocking, invokes cc-focus.sh on click.
 
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-# shellcheck disable=SC1091
-. "$script_dir/cc-lib.sh"
 alerter_bin="$(command -v alerter 2>/dev/null || echo /opt/homebrew/bin/alerter)"
-
-# Status tab: write the desired "<status> <color> <name>" to the file the editor
-# extension watches. File-based → no `open`, so it never steals Aerospace focus.
-# $6=eligible(1|empty) $7=pids $8=name. Off the hook's critical path.
-[ -n "$6" ] && cc_write_tab "$1" "$7" "$8"
+# Note: the terminal-tab .tab file is written by cc-notify.sh itself (before the
+# Stop banner gating), so the tab updates even when the banner is suppressed.
 
 # Notification icon: impersonating Claude.app's bundle id is the only way to get
 # the orange Claude logo as the icon (Big Sur+ ignores custom --app-icon). BUT
