@@ -4,6 +4,27 @@ Native macOS notifications + click-to-focus for [Claude Code](https://www.anthro
 
 When Claude needs your attention or finishes a turn, you get a macOS banner. Click it and you jump to the **exact Terminal.app window, Aerospace workspace, and tmux session/window/pane** where Claude is waiting.
 
+## Quickstart
+
+cc-notify is a Claude Code plugin — there's nothing to run; it fires automatically via hooks. Setup:
+
+```text
+/plugin marketplace add FarisHijazi/claude-plugins   # in Claude Code
+/plugin install cc-notify@farishijazi-plugins
+```
+```bash
+brew install vjeantet/tap/alerter                     # the notifier (required)
+```
+
+That's the whole core — you'll now get clickable banners. Optional extras:
+
+1. **VS Code / Cursor terminal-pane focus + live status tabs** — run
+   `"$HOME/.claude/plugins/marketplaces/farishijazi-plugins/plugins/cc-notify/bin/cc-install-editor-extension"`, then reload the editor window. ([details](#optional-focus-the-exact-vs-code--cursor-terminal-pane))
+2. **Keyboard hotkey** to "click" the latest banner — [Karabiner rule](#optional-keyboard-hotkey-to-click-the-latest-banner).
+3. **Outcome emojis** (✅/❌/👍/👎/💬 on the banner + tab) — add the [token instruction](#per-session-color--name) to `~/.claude/CLAUDE.md`.
+
+To verify / debug: `bin/cc-notify-doctor`. After a plugin update, re-run `bin/cc-install-editor-extension` if you use the extension.
+
 ## Install (via marketplace)
 
 ```text
