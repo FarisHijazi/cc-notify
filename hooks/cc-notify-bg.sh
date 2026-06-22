@@ -8,11 +8,10 @@ script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 . "$script_dir/cc-lib.sh"
 alerter_bin="$(command -v alerter 2>/dev/null || echo /opt/homebrew/bin/alerter)"
 
-# Rename the editor's integrated terminal tab to "<status> <color> <name>".
-# $6=scheme (cursor|vscode|empty), $7=pids, $8=tab name. open -g delivers the URI
-# WITHOUT bringing the editor forward (no focus steal); the extension only renames
-# when Claude's terminal is the active one. Off the hook's critical path.
-cc_fire_rename "$6" "$7" "$8"
+# Status tab: write the desired "<status> <color> <name>" to the file the editor
+# extension watches. File-based → no `open`, so it never steals Aerospace focus.
+# $6=eligible(1|empty) $7=pids $8=name. Off the hook's critical path.
+[ -n "$6" ] && cc_write_tab "$1" "$7" "$8"
 
 # Notification icon: impersonating Claude.app's bundle id is the only way to get
 # the orange Claude logo as the icon (Big Sur+ ignores custom --app-icon). BUT

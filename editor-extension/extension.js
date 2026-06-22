@@ -1,97 +1,120 @@
 const vscode = require('vscode');
 const fs = require('fs');
-const os = require('os');
 
-// Debug breadcrumb: records what the last focus request matched, so cc-notify
-// can confirm the extension is loaded and matching the right terminal.
+const STATE_DIR = '/tmp/cc-notify'; // matches the hooks' state dir
+
+// Debug breadcrumb (also where cc-notify-doctor / tests look).
 function breadcrumb(line) {
   try {
-    fs.writeFileSync(
-      `${os.tmpdir()}/cc-notify-focus.last`,
-      `${new Date().toISOString()} ${line}\n`
-    );
+    fs.writeFileSync(`${STATE_DIR}/focus.log`, `${new Date().toISOString()} ${line}\n`);
   } catch (e) {}
 }
 
-// cc-notify focus-terminal handler.
-//
-// Triggered by cc-focus.sh via:
-//   open "vscode://farishijazi.cc-notify-focus/focus?pids=<pid,pid,...>[&name=<tab-name>]"
-// (or cursor:// in Cursor).
-//
-// The `pids` are the ancestor PID chain of the Claude Code hook process. One of
-// them is the integrated terminal's shell PID, which equals Terminal.processId.
-// We match that terminal and call .show() to reveal + focus the exact pane.
-// PIDs are unique per live process, so an ancestor PID can only ever match the
-// terminal we actually came from — never a sibling terminal.
+async function findTerminalByPid(wantedPids) {
+  for (const term of vscode.window.terminals) {
+    try {
+      const pid = await term.processId;
+      if (pid && wantedPids.has(pid)) return { term, pid };
+    } catch (e) {}
+  }
+  return null;
+}
 
 function activate(context) {
+  // ── 1. Click-to-focus (cc-focus.sh fires this via `open` on a real click, so
+  //       activating the editor is desired here). ──────────────────────────────
   context.subscriptions.push(
     vscode.window.registerUriHandler({
       async handleUri(uri) {
-        const params = new URLSearchParams(uri.query || '');
         const wantedPids = new Set(
-          (params.get('pids') || params.get('pid') || '')
+          (new URLSearchParams(uri.query || '').get('pids') || '')
             .split(',')
             .map((s) => parseInt(s, 10))
             .filter((n) => Number.isFinite(n) && n > 0)
         );
-        const wantedName = params.get('name') || '';
-
-        // /rename path: set the tab name of the matching terminal. renameWithArg
-        // only acts on the ACTIVE terminal, so we reveal the pid-matched terminal
-        // first with show(true) — `true` preserves keyboard focus (doesn't pull
-        // you out of the editor), it just makes that terminal the active tab so
-        // the rename targets it. Fired with `open -g`, so the editor window isn't
-        // brought to the foreground either. This lets status badges update even on
-        // terminals you're not currently looking at.
-        if (/\/rename$/.test(uri.path) && wantedName) {
-          for (const term of vscode.window.terminals) {
-            try {
-              const pid = await term.processId;
-              if (pid && wantedPids.has(pid)) {
-                term.show(true); // reveal as active tab, keep keyboard focus put
-                await vscode.commands.executeCommand(
-                  'workbench.action.terminal.renameWithArg',
-                  { name: wantedName }
-                );
-                breadcrumb(`renamed pid=${pid} → ${wantedName}`);
-                return;
-              }
-            } catch (e) {}
-          }
-          breadcrumb(`rename: no terminal matched pids=[${[...wantedPids].join(',')}]`);
+        const hit = await findTerminalByPid(wantedPids);
+        if (hit) {
+          hit.term.show(false); // take focus — user clicked to get here
+          breadcrumb(`focus matched pid=${hit.pid} name=${hit.term.name}`);
           return;
         }
-
-        // Match by shell pid first (precise), then by tab name (fallback).
-        for (const term of vscode.window.terminals) {
-          try {
-            const pid = await term.processId;
-            if (pid && wantedPids.has(pid)) {
-              term.show(false); // false => take focus
-              breadcrumb(`matched pid=${pid} name=${term.name}`);
-              return;
-            }
-          } catch (e) {
-            // processId rejected (terminal not started) — skip.
-          }
-        }
-        if (wantedName) {
-          const byName = vscode.window.terminals.find((t) => t.name === wantedName);
-          if (byName) {
-            byName.show(false);
-            breadcrumb(`matched name=${wantedName}`);
-            return;
-          }
-        }
-
-        // No match: at least focus the terminal panel so the user lands close.
         vscode.commands.executeCommand('workbench.action.terminal.focus');
-        breadcrumb(`no match; pids=[${[...wantedPids].join(',')}] terminals=${vscode.window.terminals.length}`);
+        breadcrumb(`focus no-match pids=[${[...wantedPids].join(',')}]`);
       },
     })
   );
+
+  // ── 2. Status tab rename, driven by /tmp/cc-notify/<sid>.tab files. File-based
+  //       (NOT `open`) on purpose: `open <url>` activates the editor and yanks
+  //       Aerospace focus across workspaces. renameWithArg renames a terminal
+  //       WITHOUT raising the window, so there's no focus steal. It only acts on
+  //       the ACTIVE terminal, so if the target isn't active we defer and apply
+  //       it when that terminal next becomes active (never call show() — that
+  //       would reveal/raise the window). ───────────────────────────────────────
+  const pending = new Map(); // pid -> desired name
+
+  async function renameActiveIfMatch(wantedPids, name) {
+    const active = vscode.window.activeTerminal;
+    if (!active) return false;
+    let pid;
+    try { pid = await active.processId; } catch (e) { return false; }
+    if (!pid || !wantedPids.has(pid)) return false;
+    if (active.name !== name) {
+      await vscode.commands.executeCommand('workbench.action.terminal.renameWithArg', { name });
+      breadcrumb(`renamed pid=${pid} → ${name}`);
+    }
+    return true;
+  }
+
+  async function applyTab(file) {
+    let data;
+    try { data = JSON.parse(fs.readFileSync(file, 'utf8')); } catch (e) { return; }
+    const wantedPids = new Set((data.pids || []).filter(Boolean));
+    const name = data.name;
+    if (!name || !wantedPids.size) return;
+    // Only rename if the target terminal exists in THIS window.
+    const hit = await findTerminalByPid(wantedPids);
+    if (!hit) return;
+    if (!(await renameActiveIfMatch(wantedPids, name))) {
+      pending.set(hit.pid, name); // target not active → apply when it activates
+      breadcrumb(`deferred pid=${hit.pid} → ${name}`);
+    }
+  }
+
+  async function flushPending() {
+    if (!pending.size) return;
+    const active = vscode.window.activeTerminal;
+    if (!active) return;
+    let pid;
+    try { pid = await active.processId; } catch (e) { return; }
+    if (pending.has(pid)) {
+      const name = pending.get(pid);
+      pending.delete(pid);
+      if (active.name !== name) {
+        await vscode.commands.executeCommand('workbench.action.terminal.renameWithArg', { name });
+        breadcrumb(`renamed(deferred) pid=${pid} → ${name}`);
+      }
+    }
+  }
+  context.subscriptions.push(vscode.window.onDidChangeActiveTerminal(() => flushPending()));
+
+  try {
+    fs.mkdirSync(STATE_DIR, { recursive: true });
+    const timers = new Map();
+    const watcher = fs.watch(STATE_DIR, (_ev, fn) => {
+      if (!fn || !fn.endsWith('.tab')) return;
+      clearTimeout(timers.get(fn));
+      timers.set(fn, setTimeout(() => applyTab(`${STATE_DIR}/${fn}`), 80)); // debounce
+    });
+    context.subscriptions.push({ dispose: () => watcher.close() });
+    // Apply any tab files that already exist when the window loads.
+    for (const f of fs.readdirSync(STATE_DIR)) {
+      if (f.endsWith('.tab')) applyTab(`${STATE_DIR}/${f}`);
+    }
+    breadcrumb('watcher started');
+  } catch (e) {
+    breadcrumb(`watch error ${e}`);
+  }
 }
 
 function deactivate() {}

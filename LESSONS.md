@@ -191,11 +191,40 @@ or any env var — read them from `transcript_path`. Cascade name: customTitle �
 aiTitle → cwd basename. (An earlier research pass wrongly concluded no session name
 exists; the `/rename` → `custom-title` line is the source of truth.)
 
-Renaming a VS Code/Cursor terminal tab: `workbench.action.terminal.renameWithArg`
-with `{name}` works, but **only on the active terminal** — there's no terminal-id
-variant. To rename a *specific* tab safely, the extension checks
-`window.activeTerminal.processId ∈ pids` and only renames when it matches (true at
-turn-end / prompt, when the user is in that terminal). Fire the URI with `open -g`
-so the editor isn't pulled to the foreground. Native tab **color** can't be set for
-an existing terminal via any API (`createTerminal({color})` only, and even that is
-unreliable) → use a color **emoji** in the name instead.
+## 16. `open -g <url>` STILL activates the app — never use it for background updates
+
+`open -g` is documented as "do not bring the application to the foreground," and
+that holds for `open -g -a App`. But `open -g "cursor://…"` (a URL **scheme**)
+*still activates the app* — macOS brings the handler app forward to deliver the
+URL, and under Aerospace that yanks you to the app's workspace. Confirmed by test:
+from workspace 2, `open -g "cursor://…"` jumped focus to workspace 7 (Cursor).
+
+So a URL must only be `open`ed in response to a real user action (clicking a
+notification — activation is wanted there). For **proactive** background updates
+(e.g. renaming a terminal tab on every turn-end) do NOT use `open`. cc-notify
+writes a state file (`/tmp/cc-notify/<sid>.tab`) that the extension watches with
+`fs.watch` and acts on — zero `open`, zero activation, zero focus steal.
+
+Related: `cc-capture-window.sh` must only save the focused window as the jump-back
+target when it belongs to a terminal/editor app. A session driving Chrome (browser
+automation) would otherwise capture Chrome's window → clicking the notification
+focuses Chrome. Whitelist the real hosts (Cursor/Code/Terminal/iTerm2/Ghostty/…).
+
+## 17. Renaming a VS Code/Cursor terminal tab safely (no focus steal)
+
+`workbench.action.terminal.renameWithArg` with `{name}` works, but **only on the
+active terminal** — no terminal-id variant exists. Two ways to target a specific
+non-active terminal, and only one is steal-free:
+- `terminal.show()` first → reveals/raises the window (focus steal). ❌
+- Wait until that terminal is the active one, then `renameWithArg`. ✅
+
+So the extension: on a `.tab` change, if the target's pid == `activeTerminal`'s pid
+→ rename now; else stash it and rename on the next `onDidChangeActiveTerminal`.
+Crucially, `renameWithArg` on an active terminal does **not** raise the window —
+even in a background (unfocused) window it renames silently. So tabs update across
+workspaces with no steal, as long as we never call `show()`.
+
+For single-terminal windows (e.g. one Cursor terminal running tmux) the terminal
+is always the active one, so renames land immediately. Native tab **color** can't
+be set for an existing terminal via any API (`createTerminal({color})` only, and
+even that is unreliable) → use a color **emoji** in the name instead.

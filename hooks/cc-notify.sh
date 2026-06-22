@@ -223,22 +223,17 @@ fi
 # Same "<status> <color> <name>" string drives both the banner title and the tab.
 title=$(cc_tab_name "$status_emoji" "$emoji" "${session_title:-$cwd_basename}")
 
-# Terminal-tab rename params (VS Code/Cursor only, and only if the focus
-# extension is installed). The bg worker does the URL-encode + `open -g` so it
-# stays off the hook's critical path. Tab name = "<emoji> <session-title|project>".
-rename_scheme=""
-rename_name=""
-if [ "$term" = "vscode" ] && [ -n "$shell_pids_all" ]; then
-  rename_scheme=$(cc_editor_scheme "$editor_app")
-  # Tab name == banner title: "<status> <color> <name>" — one consistent vocab.
-  [ -n "$rename_scheme" ] && rename_name="$title"
-fi
+# Terminal-tab status (VS Code/Cursor only). The bg worker writes the .tab file
+# the extension watches (file-based — NO `open`, which would steal Aerospace
+# focus). Tab name == banner title: "<status> <color> <name>", one consistent vocab.
+tab_eligible=""
+[ "$term" = "vscode" ] && [ -n "$shell_pids_all" ] && tab_eligible=1
 
 # Spawn the bg worker fully detached: the outer subshell exits immediately,
 # orphaning bg to launchd. No quote-nesting, no nohup needed.
 ( bash "$script_dir/cc-notify-bg.sh" \
     "${session_id:-default}" "$title" "$subtitle" "$body" "$sound" \
-    "$rename_scheme" "$shell_pids_all" "$rename_name" \
+    "$tab_eligible" "$shell_pids_all" "$title" \
     </dev/null >/dev/null 2>&1 & )
 
 exit 0

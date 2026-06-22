@@ -50,24 +50,20 @@ cc_tab_name() {
   printf '%s' "$out"
 }
 
-# Resolve the URI scheme for an editor, but ONLY if the focus extension is
-# installed (else the editor pops a "not installed" toast). Echoes scheme or "".
-cc_editor_scheme() {
-  local app="$1" scheme extdir
-  case "$app" in
-    Cursor) scheme=cursor; extdir="$HOME/.cursor/extensions" ;;
-    *)      scheme=vscode; extdir="$HOME/.vscode/extensions" ;;
-  esac
-  ls -d "$extdir/farishijazi.cc-notify-focus"* >/dev/null 2>&1 || return 0
-  printf '%s' "$scheme"
-}
-
-# Fire the terminal-tab rename URI in the background (open -g → no focus steal).
-# Args: scheme pids name
-cc_fire_rename() {
-  local scheme="$1" pids="$2" name="$3" enc
-  [ -n "$scheme" ] && [ -n "$pids" ] && [ -n "$name" ] || return 0
+# Write the desired tab name + pids to a state file the editor extension watches
+# (/tmp/cc-notify/<sid>.tab). File-based on PURPOSE: `open <url>` activates the
+# editor and yanks Aerospace focus across workspaces even with `-g`, so we must
+# NOT use it for proactive (non-click) updates. The extension renames via
+# renameWithArg (no `open`, no `show()` → never raises the window). Tab whichever
+# editors have the terminal; harmless if none do. Args: sid pids(csv) name
+cc_write_tab() {
+  local sid="$1" pids="$2" name="$3"
+  [ -n "$sid" ] && [ -n "$pids" ] && [ -n "$name" ] || return 0
   command -v node >/dev/null 2>&1 || return 0
-  enc=$(node -e 'process.stdout.write(encodeURIComponent(process.argv[1]))' "$name" 2>/dev/null)
-  [ -n "$enc" ] && open -g "$scheme://farishijazi.cc-notify-focus/rename?pids=$pids&name=$enc" 2>/dev/null
+  CC_TAB_PIDS="$pids" CC_TAB_NAME="$name" node -e '
+const fs=require("fs");
+const pids=(process.env.CC_TAB_PIDS||"").split(",").map(Number).filter(Boolean);
+try{fs.writeFileSync("/tmp/cc-notify/"+process.argv[1]+".tab",
+  JSON.stringify({pids:pids,name:process.env.CC_TAB_NAME}));}catch(e){}
+' "$sid" 2>/dev/null
 }
