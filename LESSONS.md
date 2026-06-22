@@ -181,3 +181,21 @@ alerter's own authorized sender so banners always show. The always-on orange com
 from `--content-image` instead (an attachment, no authorization needed). Don't
 confuse "alerter ran successfully" with "the banner showed" — auth-dropped
 notifications still exit 0.
+
+## 15. Claude Code session name/color live in the transcript JSONL as typed lines
+
+`/rename` writes `{"type":"custom-title","customTitle":"…"}`; Claude auto-writes
+`{"type":"ai-title","aiTitle":"…"}`; `/color` writes `{"type":"agent-color","agentColor":"…"}`
+(also appears inline). There is **no** session name/color in the hook stdin payload
+or any env var — read them from `transcript_path`. Cascade name: customTitle →
+aiTitle → cwd basename. (An earlier research pass wrongly concluded no session name
+exists; the `/rename` → `custom-title` line is the source of truth.)
+
+Renaming a VS Code/Cursor terminal tab: `workbench.action.terminal.renameWithArg`
+with `{name}` works, but **only on the active terminal** — there's no terminal-id
+variant. To rename a *specific* tab safely, the extension checks
+`window.activeTerminal.processId ∈ pids` and only renames when it matches (true at
+turn-end / prompt, when the user is in that terminal). Fire the URI with `open -g`
+so the editor isn't pulled to the foreground. Native tab **color** can't be set for
+an existing terminal via any API (`createTerminal({color})` only, and even that is
+unreliable) → use a color **emoji** in the name instead.

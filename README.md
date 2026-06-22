@@ -68,13 +68,23 @@ The extension ([`editor-extension/`](./editor-extension/)) registers a
 `terminal.show()` on the terminal whose shell pid matches. See
 [LESSONS.md](./LESSONS.md) gotcha #13.
 
-## Per-session color
+## Per-session color & name
 
-If you set a session color with Claude Code's `/color` command, cc-notify reads
-that `agentColor` from the transcript and prefixes the banner subtitle with a
-matching colored emoji (🔴🟠🟡🟢🔵🟣🩷🩵) — so banners from different sessions are
-distinguishable at a glance, using the *same* color you picked (the one your
-statusline / tmux already reflect). No `/color` set → no emoji.
+cc-notify reflects two pieces of Claude Code session identity:
+
+- **Color** — `/color` sets `agentColor` in the transcript; cc-notify maps it to a
+  colored emoji (🔴🟠🟡🟢🔵🟣🩷🩵) and prefixes the banner subtitle with it (the same
+  color your statusline / tmux already show). No `/color` → no emoji.
+- **Name** — `/rename` sets `customTitle` (falls back to Claude's auto `aiTitle`,
+  then the project folder).
+
+**Terminal tab renaming** (needs the [editor extension](#optional-focus-the-exact-vs-code--cursor-terminal-pane)):
+on VS Code / Cursor, cc-notify renames the integrated terminal tab to
+`<color-emoji> <session name>` (e.g. `🟠 cc-notify`) so you can tell sessions apart
+at a glance. It fires in the background (`open -g` — never steals focus) and only
+renames when Claude's terminal is the active one, so it can't disturb you. Native
+tab *color* isn't settable by any VS Code API, so the color rides along as the
+emoji prefix.
 
 ## Toggle Stop notifications
 

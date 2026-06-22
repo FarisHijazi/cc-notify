@@ -38,6 +38,30 @@ function activate(context) {
         );
         const wantedName = params.get('name') || '';
 
+        // /rename path: set the tab name of the matching terminal. renameWithArg
+        // only acts on the ACTIVE terminal, so to avoid stealing focus / renaming
+        // the wrong tab we only rename when Claude's terminal is already active
+        // (true at SessionStart/UserPromptSubmit/turn-end). Fired with `open -g`,
+        // so the editor isn't brought forward.
+        if (/\/rename$/.test(uri.path) && wantedName) {
+          const active = vscode.window.activeTerminal;
+          if (active) {
+            try {
+              const pid = await active.processId;
+              if (pid && wantedPids.has(pid)) {
+                await vscode.commands.executeCommand(
+                  'workbench.action.terminal.renameWithArg',
+                  { name: wantedName }
+                );
+                breadcrumb(`renamed pid=${pid} → ${wantedName}`);
+                return;
+              }
+            } catch (e) {}
+          }
+          breadcrumb(`rename skipped (claude terminal not active) → ${wantedName}`);
+          return;
+        }
+
         // Match by shell pid first (precise), then by tab name (fallback).
         for (const term of vscode.window.terminals) {
           try {

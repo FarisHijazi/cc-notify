@@ -37,10 +37,16 @@ color_emoji() {
     pink) printf '🩷' ;; cyan) printf '🩵' ;; *) printf '' ;;
   esac
 }
-agent_color="" emoji=""
+# Session title: Claude Code's /rename writes "type":"custom-title" (customTitle);
+# Claude also auto-generates "aiTitle". Cascade custom → ai → project basename.
+agent_color="" emoji="" session_title=""
 if [ -n "$transcript_path" ] && [ -f "$transcript_path" ]; then
-  agent_color=$(grep -oE '"agentColor":"[^"]+"' "$transcript_path" 2>/dev/null | tail -1 | sed 's/.*:"//;s/"$//')
+  # One pass over the (possibly large) transcript for all three fields.
+  _meta=$(grep -oE '"(agentColor|customTitle|aiTitle)":"[^"]*"' "$transcript_path" 2>/dev/null)
+  agent_color=$(printf '%s\n' "$_meta" | grep '"agentColor"' | tail -1 | sed 's/.*:"//;s/"$//')
   emoji=$(color_emoji "$agent_color")
+  session_title=$(printf '%s\n' "$_meta" | grep '"customTitle"' | tail -1 | sed 's/.*:"//;s/"$//')
+  [ -z "$session_title" ] && session_title=$(printf '%s\n' "$_meta" | grep '"aiTitle"' | tail -1 | sed 's/.*:"//;s/"$//')
 fi
 
 # SSH branch: hook is running on a remote box. Bell + log, exit.
@@ -227,10 +233,27 @@ subtitle="$cwd_basename"
 [ -n "$git_branch" ] && subtitle="$cwd_basename ($git_branch)"
 [ -n "$emoji" ] && subtitle="$emoji $subtitle"
 
+# Terminal-tab rename params (VS Code/Cursor only, and only if the focus
+# extension is installed). The bg worker does the URL-encode + `open -g` so it
+# stays off the hook's critical path. Tab name = "<emoji> <session-title|project>".
+rename_scheme=""
+rename_name=""
+if [ "$term" = "vscode" ] && [ -n "$shell_pids_all" ]; then
+  case "$editor_app" in
+    Cursor) _s=cursor; _ed="$HOME/.cursor/extensions" ;;
+    *)      _s=vscode; _ed="$HOME/.vscode/extensions" ;;
+  esac
+  if ls -d "$_ed/farishijazi.cc-notify-focus"* >/dev/null 2>&1; then
+    rename_scheme="$_s"
+    rename_name="${emoji:+$emoji }${session_title:-$cwd_basename}"
+  fi
+fi
+
 # Spawn the bg worker fully detached: the outer subshell exits immediately,
 # orphaning bg to launchd. No quote-nesting, no nohup needed.
 ( bash "$script_dir/cc-notify-bg.sh" \
     "${session_id:-default}" "$title" "$subtitle" "$body" "$sound" \
+    "$rename_scheme" "$shell_pids_all" "$rename_name" \
     </dev/null >/dev/null 2>&1 & )
 
 exit 0

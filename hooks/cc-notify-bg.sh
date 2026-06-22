@@ -6,6 +6,15 @@
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 alerter_bin="$(command -v alerter 2>/dev/null || echo /opt/homebrew/bin/alerter)"
 
+# Optional: rename the editor's integrated terminal tab to "<emoji> <title>".
+# $6=scheme (cursor|vscode|empty), $7=pids, $8=tab name. open -g delivers the URI
+# WITHOUT bringing the editor to the foreground (no focus steal); the extension
+# only renames when Claude's terminal is the active one. Off the hook's path.
+if [ -n "$6" ] && [ -n "$8" ] && command -v node >/dev/null 2>&1; then
+  enc=$(node -e 'process.stdout.write(encodeURIComponent(process.argv[1]))' "$8" 2>/dev/null)
+  [ -n "$enc" ] && open -g "$6://farishijazi.cc-notify-focus/rename?pids=$7&name=$enc" 2>/dev/null
+fi
+
 # Notification icon: impersonating Claude.app's bundle id is the only way to get
 # the orange Claude logo as the icon (Big Sur+ ignores custom --app-icon). BUT
 # macOS SILENTLY DROPS notifications sent under a bundle id that lacks
