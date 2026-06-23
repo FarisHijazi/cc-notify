@@ -45,90 +45,16 @@ if [ -n "$SSH_CONNECTION" ]; then
   exit 0
 fi
 
-# Capture local context.
-term="${TERM_PROGRAM:-unknown}"
-tmux_target=""
-client_tty=""
-if [ -n "$TMUX" ] && [ -n "$TMUX_PANE" ]; then
-  tmux_target=$(tmux display-message -t "$TMUX_PANE" -p '#S:#I.#P' 2>/dev/null)
-  client_tty=$(tmux display-message -t "$TMUX_PANE" -p '#{client_tty}' 2>/dev/null)
-fi
-
-# Walk ps tree from client_tty up to find the GUI terminal app's PID.
-# Helper: try walking from a single tty. Sets `gui_pid` + `term` if it succeeds.
-_try_walk_tty() {
-  local candidate_tty="$1"
-  local tty_short="${candidate_tty#/dev/}"
-  local pid hops cmd
-  pid=$(ps -t "$tty_short" -o pid= 2>/dev/null | head -1 | tr -d ' ')
-  hops=0
-  while [ -n "$pid" ] && [ "$pid" != "1" ] && [ "$hops" -lt 20 ]; do
-    cmd=$(ps -o comm= -p "$pid" 2>/dev/null)
-    case "$cmd" in
-      */Terminal|Terminal)              [ "$term" = "tmux" ] && term="Apple_Terminal"; gui_pid="$pid"; client_tty="$candidate_tty"; return 0 ;;
-      */iTerm2|iTerm2|*/iTerm|iTerm)    [ "$term" = "tmux" ] && term="iTerm.app";      gui_pid="$pid"; client_tty="$candidate_tty"; return 0 ;;
-      */Ghostty|Ghostty|*/ghostty|ghostty) [ "$term" = "tmux" ] && term="ghostty";     gui_pid="$pid"; client_tty="$candidate_tty"; return 0 ;;
-      */Cursor|Cursor)                  [ "$term" = "tmux" ] && term="vscode"; editor_app="Cursor"; gui_pid="$pid"; client_tty="$candidate_tty"; return 0 ;;
-      */Code\ Helper*|*/Electron|*/Code|Code) [ "$term" = "tmux" ] && term="vscode"; editor_app="Code"; gui_pid="$pid"; client_tty="$candidate_tty"; return 0 ;;
-    esac
-    pid=$(ps -o ppid= -p "$pid" 2>/dev/null | tr -d ' ')
-    hops=$((hops + 1))
-  done
-  return 1
-}
-
-gui_pid=""
-editor_app=""
-
-# Capture the ancestor PID chain of this hook. For VS Code / Cursor, the
-# integrated terminal's shell PID (== Terminal.processId) is always one of these,
-# so the editor extension can focus the exact terminal pane on click. PIDs are
-# unique per live process, so an ancestor PID can only match the terminal we
-# actually came from — never a sibling terminal.
-shell_pids=""
-_p=$$
-_h=0
-while [ -n "$_p" ] && [ "$_p" != "1" ] && [ "$_h" -lt 30 ]; do
-  shell_pids="${shell_pids:+$shell_pids,}$_p"
-  _p=$(ps -o ppid= -p "$_p" 2>/dev/null | tr -d ' ')
-  _h=$((_h + 1))
-done
-
-# Primary: walk PPID from our own process up. Works when claude is run
-# directly from a terminal shell (no tmux, or tmux env got stripped along
-# the way). For tmux-attached claude, the PPID chain typically goes through
-# the tmux server (launchd-parented) and finds no terminal — the tty walks
-# below cover that case.
-_my_pid=$$
-_hops=0
-while [ -n "$_my_pid" ] && [ "$_my_pid" != "1" ] && [ "$_hops" -lt 30 ]; do
-  _cmd=$(ps -o comm= -p "$_my_pid" 2>/dev/null)
-  case "$_cmd" in
-    */Terminal|Terminal)              [ "$term" = "tmux" ] && term="Apple_Terminal"; gui_pid="$_my_pid"; break ;;
-    */iTerm2|iTerm2|*/iTerm|iTerm)    [ "$term" = "tmux" ] && term="iTerm.app";      gui_pid="$_my_pid"; break ;;
-    */Ghostty|Ghostty|*/ghostty|ghostty) [ "$term" = "tmux" ] && term="ghostty";     gui_pid="$_my_pid"; break ;;
-    */Cursor|Cursor)                  [ "$term" = "tmux" ] && term="vscode"; editor_app="Cursor"; gui_pid="$_my_pid"; break ;;
-    */Code\ Helper*|*/Electron|*/Code|Code) [ "$term" = "tmux" ] && term="vscode"; editor_app="Code"; gui_pid="$_my_pid"; break ;;
-  esac
-  _my_pid=$(ps -o ppid= -p "$_my_pid" 2>/dev/null | tr -d ' ')
-  _hops=$((_hops + 1))
-done
-
-# Fallback: the client_tty captured from the current pane.
-[ -z "$gui_pid" ] && [ -n "$client_tty" ] && _try_walk_tty "$client_tty"
-
-# Fallback: a tmux session may have multiple attached clients on different
-# ttys, and the captured one can be a zombie (terminal closed but tmux still
-# holds the slave). Iterate ALL attached clients, preferring focused + most
-# recently active, until one reaches a real GUI terminal.
-if [ -z "$gui_pid" ] && [ -n "$TMUX" ]; then
-  while IFS= read -r candidate_tty; do
-    [ -z "$candidate_tty" ] && continue
-    _try_walk_tty "$candidate_tty" && break
-  done < <(tmux list-clients -F '#{client_focused}|#{client_activity}|#{client_tty}' 2>/dev/null \
-            | sort -t'|' -k1,1nr -k2,2nr \
-            | cut -d'|' -f3)
-fi
+# Detect the GUI terminal/editor + candidate shell pids (shared with the other
+# hooks — see cc-lib.sh:cc_detect_terminal). Self-contained walk, so it also works
+# for `claude --resume` (new terminal, no prior route file).
+cc_detect_terminal
+term="$CC_TERM"
+tmux_target="$CC_TMUX_TARGET"
+client_tty="$CC_CLIENT_TTY"
+gui_pid="$CC_GUI_PID"
+editor_app="$CC_EDITOR_APP"
+shell_pids_all="$CC_SHELL_PIDS"
 
 # Captured Aerospace window id from SessionStart / UserPromptSubmit hooks.
 # This is the most reliable signal for which GUI window the user is in,
@@ -140,19 +66,6 @@ target_wid=""
 
 cwd_basename=$(basename "${cwd:-$PWD}")
 git_branch=$(git -C "${cwd:-$PWD}" symbolic-ref --short HEAD 2>/dev/null)
-
-# Stop event gating.
-#
-# When Claude runs in tmux inside VS Code/Cursor, the integrated terminal's shell
-# (== Terminal.processId) is the tmux *client's* shell — a sibling of our process
-# tree, not an ancestor (our chain hits the launchd-parented tmux server). But it
-# lives on client_tty, so add every pid on that tty to the candidate set.
-shell_pids_all="$shell_pids"
-if [ -n "$client_tty" ]; then
-  for _tp in $(ps -t "${client_tty#/dev/}" -o pid= 2>/dev/null); do
-    shell_pids_all="${shell_pids_all:+$shell_pids_all,}$_tp"
-  done
-fi
 
 # Build the "<status> <color> <session>" line that drives BOTH the banner title
 # and the terminal tab (no wasted "Claude Code" — the orange Claude content-image

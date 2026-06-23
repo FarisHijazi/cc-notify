@@ -58,18 +58,14 @@ if [ "$full" = 1 ]; then
         [ -n "$wid" ] && printf '%s' "$wid" > "/tmp/cc-notify/${session_id}.window" ;;
     esac
   fi
-  # Fresh status .tab: needs routing (term/shell_pids from a prior cc-notify turn)
-  # + color/title from the transcript. Detached so the hook returns fast.
-  route="/tmp/cc-notify/${session_id}.route"
-  if [ -f "$route" ]; then
-    term="" shell_pids=""
-    # shellcheck disable=SC1090
-    . "$route"
-    if [ "$term" = "vscode" ] && [ -n "$shell_pids" ]; then
-      cc_session_meta "$transcript_path" "$(basename "${cwd:-$PWD}")"
-      name=$(cc_tab_name "$(cc_status_emoji "$status")" "$CC_COLOR_EMOJI" "$CC_TITLE")
-      ( cc_write_tab "$session_id" "$shell_pids" "$name" </dev/null >/dev/null 2>&1 & )
-    fi
+  # Fresh status .tab — self-detect the terminal (NO route-file dependency), so it
+  # works on `claude --resume` (new terminal, no prior route) and fresh sessions
+  # alike. + color/title from the transcript. Detached so the hook returns fast.
+  cc_detect_terminal
+  if [ "$CC_TERM" = "vscode" ] && [ -n "$CC_SHELL_PIDS" ]; then
+    cc_session_meta "$transcript_path" "$(basename "${cwd:-$PWD}")"
+    name=$(cc_tab_name "$(cc_status_emoji "$status")" "$CC_COLOR_EMOJI" "$CC_TITLE")
+    ( cc_write_tab "$session_id" "$CC_SHELL_PIDS" "$name" </dev/null >/dev/null 2>&1 & )
   fi
 else
   # Cheap: just re-write the leading status emoji on the existing .tab. Detached.

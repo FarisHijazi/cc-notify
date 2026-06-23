@@ -74,6 +74,79 @@ cc_session_meta() {
   fi
 }
 
+# Detect the GUI terminal/editor hosting this hook + collect candidate shell pids
+# for the editor extension to match. Walks from the CALLER's process, so any hook
+# can name the tab WITHOUT a route file — which is what makes `claude --resume`
+# (a new terminal, no prior route) name its tab. Sets:
+#   CC_TERM       vscode | Apple_Terminal | iTerm.app | ghostty | <TERM_PROGRAM>
+#   CC_EDITOR_APP Cursor | Code | ""        CC_GUI_PID   GUI process pid (best effort)
+#   CC_CLIENT_TTY tmux client tty (if tmux) CC_TMUX_TARGET session:window.pane
+#   CC_SHELL_PIDS csv: caller's ancestor chain + every pid on CC_CLIENT_TTY
+cc_detect_terminal() {
+  CC_TERM="${TERM_PROGRAM:-unknown}"; CC_EDITOR_APP=""; CC_GUI_PID=""
+  CC_CLIENT_TTY=""; CC_TMUX_TARGET=""
+  if [ -n "$TMUX" ] && [ -n "$TMUX_PANE" ]; then
+    CC_TMUX_TARGET=$(tmux display-message -t "$TMUX_PANE" -p '#S:#I.#P' 2>/dev/null)
+    CC_CLIENT_TTY=$(tmux display-message -t "$TMUX_PANE" -p '#{client_tty}' 2>/dev/null)
+  fi
+
+  _cc_walk_tty() {  # walk a tty's process tree up to a GUI terminal; set CC_* on hit
+    local cand="$1" pid hops cmd
+    pid=$(ps -t "${cand#/dev/}" -o pid= 2>/dev/null | head -1 | tr -d ' '); hops=0
+    while [ -n "$pid" ] && [ "$pid" != "1" ] && [ "$hops" -lt 20 ]; do
+      cmd=$(ps -o comm= -p "$pid" 2>/dev/null)
+      case "$cmd" in
+        */Terminal|Terminal)              [ "$CC_TERM" = tmux ] && CC_TERM=Apple_Terminal; CC_GUI_PID="$pid"; CC_CLIENT_TTY="$cand"; return 0 ;;
+        */iTerm2|iTerm2|*/iTerm|iTerm)    [ "$CC_TERM" = tmux ] && CC_TERM=iTerm.app;      CC_GUI_PID="$pid"; CC_CLIENT_TTY="$cand"; return 0 ;;
+        */Ghostty|Ghostty|*/ghostty|ghostty) [ "$CC_TERM" = tmux ] && CC_TERM=ghostty;     CC_GUI_PID="$pid"; CC_CLIENT_TTY="$cand"; return 0 ;;
+        */Cursor|Cursor)                  [ "$CC_TERM" = tmux ] && CC_TERM=vscode; CC_EDITOR_APP=Cursor; CC_GUI_PID="$pid"; CC_CLIENT_TTY="$cand"; return 0 ;;
+        */Code\ Helper*|*/Electron|*/Code|Code) [ "$CC_TERM" = tmux ] && CC_TERM=vscode; CC_EDITOR_APP=Code; CC_GUI_PID="$pid"; CC_CLIENT_TTY="$cand"; return 0 ;;
+      esac
+      pid=$(ps -o ppid= -p "$pid" 2>/dev/null | tr -d ' '); hops=$((hops + 1))
+    done
+    return 1
+  }
+
+  # ancestor PID chain of the caller (one of these == the editor's shell pid)
+  CC_SHELL_PIDS=""; local _p=$$ _h=0
+  while [ -n "$_p" ] && [ "$_p" != "1" ] && [ "$_h" -lt 30 ]; do
+    CC_SHELL_PIDS="${CC_SHELL_PIDS:+$CC_SHELL_PIDS,}$_p"
+    _p=$(ps -o ppid= -p "$_p" 2>/dev/null | tr -d ' '); _h=$((_h + 1))
+  done
+
+  # primary: PPID walk (non-tmux). Under tmux this hits the launchd-parented
+  # server and finds nothing → the tty walks below recover it.
+  local _mp=$$ _mh=0 _cmd
+  while [ -n "$_mp" ] && [ "$_mp" != "1" ] && [ "$_mh" -lt 30 ]; do
+    _cmd=$(ps -o comm= -p "$_mp" 2>/dev/null)
+    case "$_cmd" in
+      */Terminal|Terminal)              [ "$CC_TERM" = tmux ] && CC_TERM=Apple_Terminal; CC_GUI_PID="$_mp"; break ;;
+      */iTerm2|iTerm2|*/iTerm|iTerm)    [ "$CC_TERM" = tmux ] && CC_TERM=iTerm.app;      CC_GUI_PID="$_mp"; break ;;
+      */Ghostty|Ghostty|*/ghostty|ghostty) [ "$CC_TERM" = tmux ] && CC_TERM=ghostty;     CC_GUI_PID="$_mp"; break ;;
+      */Cursor|Cursor)                  [ "$CC_TERM" = tmux ] && CC_TERM=vscode; CC_EDITOR_APP=Cursor; CC_GUI_PID="$_mp"; break ;;
+      */Code\ Helper*|*/Electron|*/Code|Code) [ "$CC_TERM" = tmux ] && CC_TERM=vscode; CC_EDITOR_APP=Code; CC_GUI_PID="$_mp"; break ;;
+    esac
+    _mp=$(ps -o ppid= -p "$_mp" 2>/dev/null | tr -d ' '); _mh=$((_mh + 1))
+  done
+
+  [ -z "$CC_GUI_PID" ] && [ -n "$CC_CLIENT_TTY" ] && _cc_walk_tty "$CC_CLIENT_TTY"
+  if [ -z "$CC_GUI_PID" ] && [ -n "$TMUX" ]; then
+    while IFS= read -r cand; do
+      [ -z "$cand" ] && continue
+      _cc_walk_tty "$cand" && break
+    done < <(tmux list-clients -F '#{client_focused}|#{client_activity}|#{client_tty}' 2>/dev/null | sort -t'|' -k1,1nr -k2,2nr | cut -d'|' -f3)
+  fi
+
+  # tmux-inside-editor: the editor's shell is the tmux client's shell (a sibling,
+  # not an ancestor) — it lives on the client tty, so add every pid there.
+  if [ -n "$CC_CLIENT_TTY" ]; then
+    local _tp
+    for _tp in $(ps -t "${CC_CLIENT_TTY#/dev/}" -o pid= 2>/dev/null); do
+      CC_SHELL_PIDS="${CC_SHELL_PIDS:+$CC_SHELL_PIDS,}$_tp"
+    done
+  fi
+}
+
 # Join non-empty parts with single spaces → "<status> <color> <title>".
 cc_tab_name() {
   local out="" p
