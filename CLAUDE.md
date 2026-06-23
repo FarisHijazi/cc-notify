@@ -4,7 +4,7 @@ State snapshot for picking up later. See @README.md for user-facing docs, @LESSO
 
 ## Status
 
-- **Version**: 1.7.0 (standalone `github.com/FarisHijazi/cc-notify`; marketplace `github.com/FarisHijazi/claude-plugins` plugin.json still needs the bump on next push)
+- **Version**: 1.7.0 — pushed to BOTH standalone `github.com/FarisHijazi/cc-notify` AND the marketplace `github.com/FarisHijazi/claude-plugins` (plugin.json bumped to 1.7.0, full plugin incl. editor-extension/ + assets/ synced). IMPORTANT: the marketplace repo is what autoUpdate installs from — hand-patching only the local cache/marketplaces dirs gets REVERTED on the next autoUpdate `git pull`. Always push to claude-plugins for changes to stick across new sessions.
 - **v1.7.0 adds**: (a) Claude orange logo on the banner via `alerter --sender com.anthropic.claudefordesktop`; (b) exact integrated-terminal-pane focus for VS Code/Cursor via the new `editor-extension/` + `bin/cc-install-editor-extension`.
 - **Installed**: via marketplace, autoUpdate on. Live caches at `~/.claude/plugins/cache/farishijazi-plugins/cc-notify/{1.0.0,1.3.2,1.3.3,1.4.0}/` — all have been hand-patched to v1.6.0 scripts.
 - **Hotkey**: Karabiner-Elements rule binds `Option+Shift+A` → `bin/cc-banner-click`. Fires on key release (not key-down) with 150 ms settle delay + 800 ms debounce. Banner dismisses via `alerter --remove` only on successful focus.
