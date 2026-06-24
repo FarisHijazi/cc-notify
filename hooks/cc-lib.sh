@@ -21,10 +21,12 @@ cc_status_emoji() {
     compacting)  printf '🗜️' ;;   # PreCompact — compacting context
     permission)  printf '🔐' ;;   # Notification — needs permission to run a tool
     question)    printf '❓' ;;   # Notification — asking you / waiting for input
+    options)     printf '🔀' ;;   # PreToolUse AskUserQuestion — multiple-choice menu open
     needs_input) printf '🔔' ;;   # Notification — generic "needs you" fallback
     idle|done)   printf 'ℹ️' ;;   # Stop fallback — turn complete, no outcome token present
     # Outcome tokens (Claude's trailing emoji), ordered clearest → weakest:
     disaster)    printf '🚨' ;;   # accident/disaster — emergency
+    complete)    printf '💯✅' ;; # 💯 token — ALL tasks done, nothing left (shown as 💯✅)
     success)     printf '✅' ;;   # task completed
     failure)     printf '❌' ;;   # task failed
     blocked)     printf '🚫' ;;   # blocked — can't proceed without you
@@ -56,7 +58,7 @@ for(let i=lines.length-1;i>=0;i--){
   if(!text.trim()) continue;                 // skip tool-only turns
   const t=text.replace(/\s+$/,"");
   // endsWith (not last code point) so multi-codepoint emojis like ℹ️ match.
-  for(const e of ["🚨","✅","❌","🚫","🙋","👍","👎","🏃","ℹ️","💬"]){ if(t.endsWith(e)){ process.stdout.write(e); break; } }
+  for(const e of ["🚨","💯","✅","❌","🚫","🙋","👍","👎","🏃","ℹ️","💬"]){ if(t.endsWith(e)){ process.stdout.write(e); break; } }
   process.exit(0);                           // only the final message matters
 }
 ' "$tp" 2>/dev/null
@@ -174,7 +176,9 @@ cc_set_status() {
   CC_NEW="$emoji" node -e '
 const fs=require("fs"), f=process.argv[1];
 let d; try{ d=JSON.parse(fs.readFileSync(f,"utf8")); }catch(e){ process.exit(0); }
-const rest=(d.name||"").replace(/^(?:⏸️|⏳|🔐|❓|🔔|👀|🚨|✅|❌|🚫|🙋|🏃|👍|👎|ℹ️|💬|🗜️)\s*/u,"");
+// Strip a RUN of leading status emojis (the two-glyph 💯✅ needs the run) plus
+// spaces. Color circles are not in the set, so the run stops at the color/name.
+const rest=(d.name||"").replace(/^(?:(?:⏸️|⏳|🔐|❓|🔀|🔔|👀|💯|🚨|✅|❌|🚫|🙋|🏃|👍|👎|ℹ️|💬|🗜️)\s*)+/u,"");
 const ne=process.env.CC_NEW||"";
 const name=ne?ne+" "+rest:rest;
 if(name===d.name) process.exit(0);
