@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # cc-install-sweep-agent — install (or remove) a launchd LaunchAgent that fires
-# cc-sweep every 30s, so background terminal tabs repaint even when NO hook runs.
+# cc-sweep every 60s, so background terminal tabs repaint even when NO hook runs.
 #
 # Each tick is just `cc-sweep`, which self-throttles (≤1/10s), skips while you're
 # typing, and QUEUES if blocked — so the heartbeat obeys the exact same guards as a
@@ -12,7 +12,7 @@
 set -u
 
 LABEL="com.farishijazi.cc-notify-sweep"
-INTERVAL="${CC_SWEEP_AGENT_INTERVAL:-30}"
+INTERVAL="${CC_SWEEP_AGENT_INTERVAL:-60}"
 here="$(cd "$(dirname "$0")" && pwd)"
 sweep="$here/cc-sweep"
 plist="$HOME/Library/LaunchAgents/$LABEL.plist"
