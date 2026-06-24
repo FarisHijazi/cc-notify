@@ -103,11 +103,41 @@ function activate(context) {
   }
   context.subscriptions.push(vscode.window.onDidChangeActiveTerminal(() => reapplyActiveTab()));
 
+  // ── 3. Sweep: cycle through every terminal in THIS window so each one's .tab
+  //       name gets applied (renameWithArg/reapplyActiveTab only act on the ACTIVE
+  //       terminal). We step with `workbench.action.terminal.focusNext` — the exact
+  //       native command bound to Alt+Up, so it's instant — N times, which wraps
+  //       back to where it started. Each step fires onDidChangeActiveTerminal →
+  //       reapplyActiveTab(), so no explicit rename here. Triggered by touching
+  //       /tmp/cc-notify/.sweep — EVERY window's extension watches that file, so all
+  //       windows sweep their own terminals IN PARALLEL (no per-window waiting, no
+  //       keystroke injection, no accessibility perms, no frontmost requirement). ──
+  let sweeping = false;
+  async function sweepThisWindow() {
+    if (sweeping) return;
+    sweeping = true;
+    try {
+      const n = vscode.window.terminals.length;
+      if (!n) return;
+      const original = vscode.window.activeTerminal; // remember where we started
+      for (let i = 0; i < n; i++) {
+        await vscode.commands.executeCommand('workbench.action.terminal.focusNext');
+        await new Promise((r) => setTimeout(r, 10)); // let onDidChangeActiveTerminal land
+      }
+      if (original) original.show(false); // deterministically land back on the start tab (kills focusNext off-by-one)
+      breadcrumb(`swept ${n} terminals (focusNext), back to ${original ? original.name : 'n/a'}`);
+    } finally {
+      sweeping = false;
+    }
+  }
+
   try {
     fs.mkdirSync(STATE_DIR, { recursive: true });
     const timers = new Map();
     const watcher = fs.watch(STATE_DIR, (_ev, fn) => {
-      if (!fn || !fn.endsWith('.tab')) return;
+      if (!fn) return;
+      if (fn === '.sweep') { sweepThisWindow(); return; } // parallel across windows
+      if (!fn.endsWith('.tab')) return;
       clearTimeout(timers.get(fn));
       timers.set(fn, setTimeout(() => applyTab(`${STATE_DIR}/${fn}`), 80)); // debounce
     });

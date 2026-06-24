@@ -203,3 +203,15 @@ try{fs.writeFileSync("/tmp/cc-notify/"+process.argv[1]+".tab",
   JSON.stringify({pids:pids,name:process.env.CC_TAB_NAME}));}catch(e){}
 ' "$sid" 2>/dev/null
 }
+
+# Fire a tab-repaint sweep so BACKGROUND windows' tabs catch up to a status change
+# (a backgrounded session's .tab updates, but its tab only re-renders when its
+# terminal becomes active — a sweep cycles them so each repaints). Safe to call on
+# any status change: cc-sweep self-throttles to 1/10s, skips while the user is
+# typing, and queues if blocked (see bin/cc-sweep). Backgrounded so the hook returns
+# fast. cc-lib.sh lives in hooks/, so cc-sweep is ../bin/cc-sweep.
+cc_trigger_sweep() {
+  local sweep
+  sweep="$(cd "$(dirname "${BASH_SOURCE[0]}")/../bin" 2>/dev/null && pwd)/cc-sweep"
+  [ -x "$sweep" ] && ( "$sweep" </dev/null >/dev/null 2>&1 & )
+}

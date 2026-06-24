@@ -126,6 +126,11 @@ else
   ( cc_set_status "${session_id:-default}" "$status_emoji" </dev/null >/dev/null 2>&1 & )
 fi
 
+# This session's status just changed (Stop = turn done, or a Notification) — repaint
+# every window's tabs so a backgrounded session's tab catches up. Throttled + typing-
+# guarded + queued inside cc-sweep; runs even when the banner is suppressed below.
+cc_trigger_sweep
+
 # Persist routing payload for the click handler.
 route_file="$state_dir/${session_id:-default}.route"
 {
