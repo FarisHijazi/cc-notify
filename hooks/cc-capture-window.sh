@@ -36,6 +36,14 @@ let d="";process.stdin.on("data",c=>d+=c).on("end",()=>{
 
 mkdir -p /tmp/cc-notify 2>/dev/null
 
+# You just responded to this session (sent a prompt) → you've clearly seen it, so
+# clear any pending notification banner for it: dismiss it from Notification
+# Center and kill the bg alerter still waiting for a click. Detached/fast.
+if [ "$event" = "UserPromptSubmit" ]; then
+  _al="$(command -v alerter 2>/dev/null || echo /opt/homebrew/bin/alerter)"
+  ( "$_al" --remove "cc-$session_id" >/dev/null 2>&1; pkill -f "alerter.*cc-$session_id" 2>/dev/null; ) &
+fi
+
 # Map the event → status, and whether it needs a FULL (grep) update.
 status="" full=0
 case "$event" in
