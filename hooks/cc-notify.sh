@@ -88,10 +88,15 @@ else
   [ -z "$status_emoji" ] && status_emoji=$(cc_status_emoji idle)
   sound="Hero"
   case "$status_emoji" in
+    🚨) subtitle="⚠️ Accident / disaster" ;;
     ✅) subtitle="Task complete" ;;
     ❌) subtitle="Task failed" ;;
+    🚫) subtitle="Blocked" ;;
+    🙋) subtitle="Waiting for instructions" ;;
     👍) subtitle="Good news" ;;
     👎) subtitle="Bad news" ;;
+    🏃) subtitle="Work to be done" ;;
+    ℹ️) subtitle="FYI" ;;
     *)  subtitle="Turn complete" ;;
   esac
   body="$cwd_basename"

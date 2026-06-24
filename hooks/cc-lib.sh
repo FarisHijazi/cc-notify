@@ -22,12 +22,17 @@ cc_status_emoji() {
     permission)  printf '🔐' ;;   # Notification — needs permission to run a tool
     question)    printf '❓' ;;   # Notification — asking you / waiting for input
     needs_input) printf '🔔' ;;   # Notification — generic "needs you" fallback
-    idle|done)   printf '👀' ;;   # Stop — turn complete, your turn
-    success)     printf '✅' ;;   # last message ended with ✅ (task done)
-    failure)     printf '❌' ;;   # last message ended with ❌ (task failed)
-    good)        printf '👍' ;;   # last message ended with 👍 (good news, no task outcome)
-    bad)         printf '👎' ;;   # last message ended with 👎 (bad news, no task outcome)
-    other)       printf '💬' ;;   # last message ended with 💬 (neutral reply / no outcome)
+    idle|done)   printf '👀' ;;   # Stop — turn complete, your turn (no token present)
+    # Outcome tokens (Claude's trailing emoji), ordered clearest → weakest:
+    disaster)    printf '🚨' ;;   # accident/disaster — emergency
+    success)     printf '✅' ;;   # task completed
+    failure)     printf '❌' ;;   # task failed
+    blocked)     printf '🚫' ;;   # blocked — can't proceed without you
+    waiting)     printf '🙋' ;;   # waiting for your instructions / a decision
+    work)        printf '🏃' ;;   # work to be done — next steps await
+    good)        printf '👍' ;;   # good news (no task)
+    bad)         printf '👎' ;;   # bad news (no task)
+    info)        printf 'ℹ️' ;;   # just info — weakest signal
     *)           printf '' ;;
   esac
 }
@@ -49,8 +54,9 @@ for(let i=lines.length-1;i>=0;i--){
   if(j.type!=="assistant" || !j.message || !Array.isArray(j.message.content)) continue;
   const text=j.message.content.filter(b=>b&&b.type==="text").map(b=>b.text).join("");
   if(!text.trim()) continue;                 // skip tool-only turns
-  const last=[...text.replace(/\s+$/,"")].pop()||"";
-  if(["✅","❌","👍","👎","💬"].includes(last)) process.stdout.write(last);
+  const t=text.replace(/\s+$/,"");
+  // endsWith (not last code point) so multi-codepoint emojis like ℹ️ match.
+  for(const e of ["🚨","✅","❌","🚫","🙋","👍","👎","🏃","ℹ️","💬"]){ if(t.endsWith(e)){ process.stdout.write(e); break; } }
   process.exit(0);                           // only the final message matters
 }
 ' "$tp" 2>/dev/null
@@ -168,7 +174,7 @@ cc_set_status() {
   CC_NEW="$emoji" node -e '
 const fs=require("fs"), f=process.argv[1];
 let d; try{ d=JSON.parse(fs.readFileSync(f,"utf8")); }catch(e){ process.exit(0); }
-const rest=(d.name||"").replace(/^(?:⏸️|⏳|🔐|❓|🔔|👀|✅|❌|👍|👎|💬|🗜️)\s*/u,"");
+const rest=(d.name||"").replace(/^(?:⏸️|⏳|🔐|❓|🔔|👀|🚨|✅|❌|🚫|🙋|🏃|👍|👎|ℹ️|💬|🗜️)\s*/u,"");
 const ne=process.env.CC_NEW||"";
 const name=ne?ne+" "+rest:rest;
 if(name===d.name) process.exit(0);
