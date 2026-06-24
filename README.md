@@ -129,6 +129,9 @@ each message with a trailing emoji. Priority order (clearest → weakest):
 
 Add the token rules to your `~/.claude/CLAUDE.md` (Claude appends the first that
 applies; cc-notify reads it on `Stop`). Without it, the done state is just 👀.
+Ready-made rules: [`docs/cc-notify-tokens.md`](./docs/cc-notify-tokens.md) — copy
+it next to your `~/.claude/CLAUDE.md` and add a line `@cc-notify-tokens.md` to keep
+CLAUDE.md clean (Claude Code imports `@`-referenced files).
 
 cc-notify reads that trailing emoji from the transcript on `Stop`. Without it, the
 done state is just 👀 "your turn".
