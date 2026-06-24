@@ -110,7 +110,7 @@ apart — and see their state — at a glance. The status emoji tracks the sessi
 | working | ⏳ |
 | needs permission | 🔐 |
 | asking you / input | ❓ |
-| done — your turn | 👀 |
+| done (no outcome token) | ℹ️ |
 
 The done state can reflect the actual **outcome** if you instruct Claude to end
 each message with a trailing emoji. Priority order (clearest → weakest):

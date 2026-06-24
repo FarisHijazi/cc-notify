@@ -22,7 +22,7 @@ cc_status_emoji() {
     permission)  printf '🔐' ;;   # Notification — needs permission to run a tool
     question)    printf '❓' ;;   # Notification — asking you / waiting for input
     needs_input) printf '🔔' ;;   # Notification — generic "needs you" fallback
-    idle|done)   printf '👀' ;;   # Stop — turn complete, your turn (no token present)
+    idle|done)   printf 'ℹ️' ;;   # Stop fallback — turn complete, no outcome token present
     # Outcome tokens (Claude's trailing emoji), ordered clearest → weakest:
     disaster)    printf '🚨' ;;   # accident/disaster — emergency
     success)     printf '✅' ;;   # task completed
