@@ -228,3 +228,34 @@ For single-terminal windows (e.g. one Cursor terminal running tmux) the terminal
 is always the active one, so renames land immediately. Native tab **color** can't
 be set for an existing terminal via any API (`createTerminal({color})` only, and
 even that is unreliable) → use a color **emoji** in the name instead.
+
+## 18. The tab status had two writers with MISMATCHED gating → ⏳ froze forever
+
+The terminal-tab status has two write paths:
+- **cheap** (`cc_set_status`, in `cc-capture-window.sh` for PreToolUse/PostToolUse/…):
+  swaps just the leading status emoji on the existing `.tab`. **No gate** — needs
+  only the file to exist. This is what writes the mid-turn **⏳ "running"**.
+- **full** (`cc_write_tab`, in `cc-notify.sh` for Notification/Stop): rebuilds the
+  whole `<status> <color> <title>` name. **Gated** on `term=vscode` from
+  `cc_detect_terminal` — which is **flaky under tmux** (it walks the tmux client
+  tty up to the GUI app; a momentary miss leaves `term=tmux`, not `vscode`).
+
+The bug: a session ends → `Stop` fires → `cc_detect_terminal` flakes →
+`if term=vscode` is false → **the full write is skipped entirely** (there was no
+`else`). The last thing that touched the tab was the *ungated* cheap ⏳, so the tab
+**freezes on ⏳** even though the turn is done. Only bites tmux-in-editor sessions
+(plain non-tmux Cursor detects reliably). Symptom: "finished sessions still show the
+hourglass, and clicking/focusing doesn't fix it" — focus can't help, the `.tab` file
+itself held ⏳.
+
+**Rule: if a low-frequency 'final' write is gated more strictly than the
+high-frequency 'in-progress' write that precedes it, the in-progress state sticks
+whenever the gate fails.** Fix = give the gated write a cheap, ungated fallback:
+`if term=vscode … else cc_set_status "$sid" "$status_emoji"`. The cheap path can
+always at least swap the emoji on the existing tab, so ⏳ can never outlive the turn.
+
+To resync already-stuck tabs without restarting sessions: for each `.tab` whose name
+starts with ⏳, `cc_set_status` it to (transcript token via `cc_last_status_token`,
+else `ℹ️`). Skip sessions whose transcript changed in the last ~45s — those are
+genuinely still running, and a ⏳ that reverts right after you "fix" it is the tell
+that the session is active, not stuck.

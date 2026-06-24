@@ -107,10 +107,14 @@ apart — and see their state — at a glance. The status emoji tracks the sessi
 | State | Emoji |
 |---|---|
 | fresh session (startup) | ⏸️ |
-| working | ⏳ |
+| working (turn in progress) | ⏳ |
 | needs permission | 🔐 |
 | asking you / input | ❓ |
+| multiple-choice menu open (AskUserQuestion) | 🔀 |
 | done (no outcome token) | ℹ️ |
+
+(⏳ means Claude is **actively working** — not done. "Done" shows an outcome emoji
+below, or ℹ️/👀 when there's no token.)
 
 The done state can reflect the actual **outcome** if you instruct Claude to end
 each message with a trailing emoji. Priority order (clearest → weakest):
@@ -118,6 +122,7 @@ each message with a trailing emoji. Priority order (clearest → weakest):
 | Outcome | Emoji |
 |---|---|
 | accident / disaster | 🚨 |
+| all tasks done, nothing left | 💯✅ |
 | task completed | ✅ |
 | task failed | ❌ |
 | blocked | 🚫 |
@@ -164,7 +169,10 @@ touch ~/.claude/notify.suppress_when_focused # don't ping the window you're on
 rm ~/.claude/notify.suppress_when_focused    # always ping (default)
 ```
 
-`Notification` events (input requests) always fire — those are the high-signal ones.
+**Permission** `Notification`s always fire a banner — those are the high-signal
+ones. The **idle** `Notification` (Claude Code's ~60s "waiting for your input")
+is **tab-status-only — no banner** (it updates the terminal tab to ❓ but doesn't
+ping); it's low-signal and noisy, and the instant `Stop` ping already covers "done".
 
 ## Click-routing by terminal
 

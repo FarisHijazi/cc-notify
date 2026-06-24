@@ -77,9 +77,12 @@ if [ "$event_kind" = "notification" ]; then
   # notification_type with a message-text fallback. Unknown types → 🔔. The exact
   # type strings are logged to notiftypes.log so the mapping can be refined.
   printf '%s\t%s\n' "${notif_type:-?}" "$message" >> "$state_dir/notiftypes.log" 2>/dev/null
+  # idle/input notifications (CC's ~60s "waiting for your input") are LOW-signal
+  # and noisy → update the tab status only, NO banner (notif_tab_only=1). Permission
+  # prompts and the generic fallback still banner.
   case "$notif_type $message" in
     *permission*|*Permission*) status_emoji=$(cc_status_emoji permission); subtitle="Needs permission" ;;
-    *idle*|*waiting*|*input*|*question*) status_emoji=$(cc_status_emoji question); subtitle="Awaiting your input" ;;
+    *idle*|*waiting*|*input*|*question*) status_emoji=$(cc_status_emoji question); subtitle="Awaiting your input"; notif_tab_only=1 ;;
     *) status_emoji=$(cc_status_emoji needs_input); subtitle="Needs your attention" ;;
   esac
   body="${message:-Claude needs you}"
@@ -89,6 +92,7 @@ else
   sound="Hero"
   case "$status_emoji" in
     🚨) subtitle="⚠️ Accident / disaster" ;;
+    💯) subtitle="All tasks complete"; status_emoji=$(cc_status_emoji complete) ;;  # 💯 → display 💯✅
     ✅) subtitle="Task complete" ;;
     ❌) subtitle="Task failed" ;;
     🚫) subtitle="Blocked" ;;
@@ -108,8 +112,18 @@ title=$(cc_tab_name "$status_emoji" "$emoji" "${session_title:-$cwd_basename}")
 # This MUST run even when the Stop banner is suppressed/kill-switched, otherwise
 # the tab gets stuck (e.g. frozen on ⏳). File-based (the extension watches it);
 # NO `open` (which would steal Aerospace focus).
+#
+# Two-tier so ⏳ can NEVER stick: the full write (cc_write_tab) refreshes color+title
+# but is gated on positively detecting the editor (term=vscode) — which is FLAKY
+# under tmux. If detection failed this invocation, fall back to the cheap
+# cc_set_status, which just swaps the leading status emoji on the EXISTING .tab with
+# NO term/pid dependency. The mid-turn ⏳ comes from that same cheap path (no gate),
+# so the outcome/done emoji must be writable the same way — else a flaked detection
+# on Stop leaves the tab frozen on ⏳ (the exact bug this fixes).
 if [ "$term" = "vscode" ] && [ -n "$shell_pids_all" ]; then
   ( cc_write_tab "${session_id:-default}" "$shell_pids_all" "$title" </dev/null >/dev/null 2>&1 & )
+else
+  ( cc_set_status "${session_id:-default}" "$status_emoji" </dev/null >/dev/null 2>&1 & )
 fi
 
 # Persist routing payload for the click handler.
@@ -152,6 +166,11 @@ if [ "$event_kind" = "stop" ]; then
     fi
   fi
 fi
+
+# Idle/input Notification (CC's ~60s "waiting for your input"): tab status already
+# updated above — suppress the banner here. Keeps the high-signal pings (permission,
+# Stop, generic) while dropping the noisy idle one.
+[ -n "$notif_tab_only" ] && exit 0
 
 # Spawn the bg worker (the BANNER) fully detached: the outer subshell exits
 # immediately, orphaning bg to launchd. No quote-nesting, no nohup needed.

@@ -8,15 +8,22 @@ Example ending: `...all set.   ✅`
 Pick the FIRST that applies (top = clearest/strongest signal, bottom = weakest):
 
 1. `🚨` — an accident/disaster happened (e.g. deleted a production database by accident) — emergency, overrides everything
-2. `✅` — a concrete task/request was completed successfully
-3. `❌` — a concrete task/request failed or could not be completed
-4. `🚫` — BLOCKED: can't proceed until something is resolved (needs you to unblock)
-5. `🙋` — WAITING for your instructions / a decision before continuing
-6. `👍` — good news / positive result (no specific task)
-7. `👎` — bad news / negative result (no specific task)
-8. `🏃` — there's WORK to be done: remaining steps or a proposed plan awaiting go-ahead
-9. `ℹ️` — JUST INFO: you answered with information, nothing actionable (weakest — last resort)
+2. `💯` — all concrete tasks/requests were completed successfully and there's nothing left to do (cc-notify shows this as `💯✅`)
+3. `✅` — a concrete task/request was completed successfully
+4. `❌` — a concrete task/request failed or could not be completed
+5. `🚫` — BLOCKED: can't proceed until something is resolved (needs you to unblock)
+6. `🙋` — WAITING for your instructions / a decision before continuing
+7. `👍` — good news / positive result (no specific task)
+8. `👎` — bad news / negative result (no specific task)
+9. `🏃` — there's WORK to be done: remaining steps or a proposed plan awaiting go-ahead
+10. `ℹ️` — JUST INFO: you answered with information, nothing actionable (weakest — last resort)
 
 So the message literally ends with `...done.   ✅` (or any one of the above).
 cc-notify's Stop hook reads this trailing emoji to show status on the notification
 + terminal tab. Always include exactly one; never omit it and never put text after it.
+
+IMPORTANT: these token emojis (🚨 💯 ✅ ❌ 🚫 🙋 👍 👎 🏃 ℹ️) must appear in a response
+ONLY as that single trailing token. Do NOT also use them inline, in bullets, or as
+"done" checkmarks on section headings (e.g. `## Step 1 → foo ✅`) — that makes the
+outcome look like it repeats. For marking things done mid-message use plain text or
+a non-token glyph like ✓ (which is NOT in the set above).

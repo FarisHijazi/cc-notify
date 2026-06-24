@@ -20,18 +20,20 @@ script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 . "$script_dir/cc-lib.sh"
 
 input=$(cat 2>/dev/null)
-read -r session_id event transcript_path cwd <<<"$(printf '%s' "$input" | node -e '
+read -r session_id event transcript_path cwd tool_name <<<"$(printf '%s' "$input" | node -e '
 let d="";process.stdin.on("data",c=>d+=c).on("end",()=>{
   try{const j=JSON.parse(d||"{}");
     const s=j.session_id||"";
     const e=j.hook_event_name||"";
     const t=(j.transcript_path||"").replace(/\s/g,"_")||"-";
     const c=(j.cwd||"").replace(/\s/g,"_")||"-";
-    process.stdout.write(`${s} ${e} ${t} ${c}`);
-  }catch(err){process.stdout.write("   ")}
+    const n=(j.tool_name||"-");      // tool names have no spaces
+    process.stdout.write(`${s} ${e} ${t} ${c} ${n}`);
+  }catch(err){process.stdout.write("    ")}
 });' 2>/dev/null)"
 [ "$transcript_path" = "-" ] && transcript_path="" ; transcript_path="${transcript_path//_/ }"
 [ "$cwd" = "-" ] && cwd="" ; cwd="${cwd//_/ }"
+[ "$tool_name" = "-" ] && tool_name=""
 [ -z "$session_id" ] && exit 0
 
 mkdir -p /tmp/cc-notify 2>/dev/null
@@ -45,13 +47,18 @@ if [ "$event" = "UserPromptSubmit" ]; then
 fi
 
 # Map the event → status, and whether it needs a FULL (grep) update.
+# AskUserQuestion is a TOOL (no Notification fires for its menu), so PreToolUse is
+# the signal that a multiple-choice menu just opened → 🔀. Its PostToolUse (you
+# answered) falls back to ⏳ running like any other tool.
 status="" full=0
 case "$event" in
-  SessionStart)                          status=startup;    full=1 ;;
-  UserPromptSubmit)                      status=running;    full=1 ;;
-  PreToolUse|PostToolUse|SubagentStop)   status=running ;;
-  PreCompact)                            status=compacting ;;
-  SessionEnd)                            status=ended ;;
+  SessionStart)                status=startup;    full=1 ;;
+  UserPromptSubmit)            status=running;    full=1 ;;
+  PreToolUse)
+    if [ "$tool_name" = "AskUserQuestion" ]; then status=options; else status=running; fi ;;
+  PostToolUse|SubagentStop)    status=running ;;
+  PreCompact)                  status=compacting ;;
+  SessionEnd)                  status=ended ;;
 esac
 [ -z "$status" ] && exit 0
 
