@@ -4,6 +4,10 @@ State snapshot for picking up later. See @README.md for user-facing docs, @LESSO
 
 ## Status
 
+- **Deploy after pushing to `main`** (the two commands the user runs, in order):
+  1. `/plugin marketplace update farishijazi-plugins`  ← re-pulls the bumped plugin from `main` (needs the `plugin.json` version bumped, else no-op)
+  2. `/reload-plugins`  ← reloads hooks into the session
+  Then **new** Claude Code sessions run the new hook scripts. Editor-extension changes additionally need an editor window reload (Cmd+Shift+P → Developer: Reload Window).
 - **Version**: 1.7.5 (extension 1.0.1). **Single source of truth = the `cc-notify` repo** (develop here, push to `main`). The marketplace `github.com/FarisHijazi/claude-plugins` references it externally (`source: {github, repo: FarisHijazi/cc-notify}`; bundled copy deleted) so there's no second copy to drift. **MUST bump `.claude-plugin/plugin.json` version on every change** or `/plugin update` no-ops and installed sessions run a frozen stale cache (this bit us — frozen 1.7.0). Latest session handoff: @docs/devlog/claude_2026-06-24-v1.7.x-session.md.
 - **v1.7.0 adds**: (a) Claude orange logo on the banner via `alerter --sender com.anthropic.claudefordesktop`; (b) exact integrated-terminal-pane focus for VS Code/Cursor via the new `editor-extension/` + `bin/cc-install-editor-extension`.
 - **v1.7.5 fixes**: **stuck-⏳ tabs**. The `Stop`/`Notification` tab write in `cc-notify.sh` was gated `if term=vscode && shell_pids` (cc_write_tab) with NO else — but `cc_detect_terminal` is FLAKY under tmux, while the mid-turn ⏳ comes from the UNGATED cheap path (`cc_set_status` in cc-capture-window.sh). So a flaked detection on Stop left ⏳ frozen forever (deployed 1.7.1 had `cc_set_status` count=0 in cc-notify.sh — confirmed). Fix: added `else ( cc_set_status "$sid" "$status_emoji" & )` so the outcome emoji is ALWAYS swapped onto the existing `.tab`, term-detection or not. Only ever bit tmux-in-Cursor sessions. One-off resync of already-stuck tabs: loop `.tab`s starting with ⏳ → `cc_set_status` to (transcript token || ℹ️), skipping active sessions (transcript mtime <45s). See @LESSONS.md #18.
