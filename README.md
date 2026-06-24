@@ -147,6 +147,17 @@ focus across spaces. The extension renames via the terminal API without raising 
 window, so it never disturbs you. Native tab *color* isn't settable by any VS Code
 API, so the color rides along as the emoji prefix.
 
+A **background** terminal's tab can only re-render when it becomes active, so when a
+backgrounded session changes state (e.g. finishes: ⏳→✅) its tab would stay stale
+until you focus it. To fix that, cc-notify **auto-sweeps** on settled events (`Stop`,
+`Notification`, `SessionStart`, `SessionEnd`): it touches `/tmp/cc-notify/.sweep`,
+which every editor window's extension watches and responds to by briefly cycling its
+terminals (`focusNext`) so each tab repaints, then landing back where it started. The
+sweep is **throttled** (≤1 / 10 s), **skipped while you're typing** (no keystroke in
+the last 3 s — read live from the OS, no daemon/permissions), and **queued** if
+blocked (it fires the moment you stop typing) — so it never interrupts you mid-type.
+Mouse movement doesn't block it.
+
 ## Toggle Stop notifications
 
 `Stop` fires the moment Claude is **fully done** — after every subagent has

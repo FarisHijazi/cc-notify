@@ -90,4 +90,12 @@ else
     ( cc_set_status "$session_id" "$(cc_status_emoji "$status")" </dev/null >/dev/null 2>&1 & )
   fi
 fi
+
+# Repaint all windows' tabs on the low-frequency settled events only (a session
+# appearing or ending). NOT on mid-turn churn (PreToolUse/PostToolUse/…) — those
+# would flicker the active window every ~10s. Throttled + typing-guarded + queued
+# inside cc-sweep.
+case "$event" in
+  SessionStart|SessionEnd) cc_trigger_sweep ;;
+esac
 exit 0

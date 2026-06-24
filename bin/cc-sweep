@@ -1,0 +1,84 @@
+#!/usr/bin/env bash
+# cc-sweep — fire a tab-repaint sweep, but NOT while the user is typing.
+#
+# Touching /tmp/cc-notify/.sweep makes every editor window's extension cycle its
+# terminals so each tab repaints to its current status (see editor-extension's
+# sweepThisWindow). That briefly moves terminal focus, so two guards apply (both
+# off only with --force):
+#   1. THROTTLE — at most one sweep per CC_SWEEP_THROTTLE seconds (default 10).
+#      State = .sweep's own mtime (the extension watches but never deletes it), so
+#      there's no extra file to track "last sweep time".
+#   2. KBD_GUARD — skip if a key was pressed within CC_SWEEP_KBD_GUARD seconds
+#      (default 3). Mouse movement does NOT block — moving the mouse means the user
+#      isn't typing, which is exactly when a sweep is safe.
+#
+# A blocked sweep is QUEUED, not cancelled: a single background drainer polls until
+# both guards clear, then fires once. Many blocked triggers coalesce into ONE
+# pending sweep (atomic mkdir lock = single-flight). Idle is read live from the OS
+# HID state via cc-input-idle (no daemon, no perms).
+#
+# Usage:  cc-sweep            # both guards, queue if blocked
+#         cc-sweep --force    # fire now, bypass both guards
+set -u
+
+STATE_DIR="/tmp/cc-notify"
+SWEEP_FILE="$STATE_DIR/.sweep"
+LOCK="$STATE_DIR/.sweep.lock"
+GUARD="${CC_SWEEP_KBD_GUARD:-3}"
+THROTTLE="${CC_SWEEP_THROTTLE:-10}"
+POLL="${CC_SWEEP_POLL:-1}"            # drainer poll interval (seconds, integer)
+MAXWAIT="${CC_SWEEP_QUEUE_MAX:-600}"  # give up queuing after this long
+here="$(cd "$(dirname "$0")" && pwd)"
+src="$here/cc-input-idle.swift"
+cache="$HOME/.cache/cc-notify"
+bin="$cache/cc-input-idle"
+
+mkdir -p "$STATE_DIR" "$cache"
+
+ensure_bin() {  # (re)compile the helper if missing or stale (swiftc ~1s)
+  [ -x "$bin" ] && [ ! "$src" -nt "$bin" ] && return 0
+  swiftc -O "$src" -o "$bin" 2>/dev/null
+}
+
+throttled() {   # true → a sweep happened within THROTTLE seconds
+  [ -f "$SWEEP_FILE" ] || return 1
+  local last; last=$(stat -f %m "$SWEEP_FILE" 2>/dev/null || echo 0)
+  [ $(( $(date +%s) - last )) -lt "$THROTTLE" ]
+}
+
+typing() {      # true → a key was pressed within GUARD seconds
+  ensure_bin || return 1   # can't measure → fail open (treat as not typing)
+  local kbd _m
+  read -r kbd _m < <("$bin" 2>/dev/null) || return 1
+  [ -n "$kbd" ] && awk "BEGIN{exit !($kbd < $GUARD)}"
+}
+
+blocked() { throttled || typing; }
+
+force=0
+[ "${1:-}" = "--force" ] && force=1
+
+if [ "$force" -eq 1 ] || ! blocked; then
+  touch "$SWEEP_FILE"
+  exit 0
+fi
+
+# Blocked → queue it. Reap a stale lock (a drainer that died without cleanup),
+# then try to become THE drainer. mkdir is atomic: lose the race and a drainer is
+# already pending, so this trigger is coalesced and we just exit.
+if [ -d "$LOCK" ]; then
+  lage=$(( $(date +%s) - $(stat -f %m "$LOCK" 2>/dev/null || echo 0) ))
+  [ "$lage" -gt $((MAXWAIT + 30)) ] && rmdir "$LOCK" 2>/dev/null
+fi
+mkdir "$LOCK" 2>/dev/null || exit 0
+
+(
+  trap 'rmdir "$LOCK" 2>/dev/null' EXIT
+  waited=0
+  while [ "$waited" -lt "$MAXWAIT" ]; do
+    sleep "$POLL"
+    waited=$((waited + POLL))
+    blocked || { touch "$SWEEP_FILE"; break; }
+  done
+) </dev/null >/dev/null 2>&1 &
+exit 0
