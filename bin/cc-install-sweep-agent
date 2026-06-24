@@ -1,0 +1,55 @@
+#!/usr/bin/env bash
+# cc-install-sweep-agent — install (or remove) a launchd LaunchAgent that fires
+# cc-sweep every 30s, so background terminal tabs repaint even when NO hook runs.
+#
+# Each tick is just `cc-sweep`, which self-throttles (≤1/10s), skips while you're
+# typing, and QUEUES if blocked — so the heartbeat obeys the exact same guards as a
+# hook-triggered sweep (see bin/cc-sweep). The plist points at THIS dir's cc-sweep,
+# so re-run after a plugin update to re-point at the new version.
+#
+# Usage:  cc-install-sweep-agent            # install + load
+#         cc-install-sweep-agent --uninstall
+set -u
+
+LABEL="com.farishijazi.cc-notify-sweep"
+INTERVAL="${CC_SWEEP_AGENT_INTERVAL:-30}"
+here="$(cd "$(dirname "$0")" && pwd)"
+sweep="$here/cc-sweep"
+plist="$HOME/Library/LaunchAgents/$LABEL.plist"
+domain="gui/$(id -u)"
+
+unload() { launchctl bootout "$domain/$LABEL" 2>/dev/null; launchctl unload "$plist" 2>/dev/null; }
+
+if [ "${1:-}" = "--uninstall" ]; then
+  unload
+  rm -f "$plist"
+  echo "removed $LABEL"
+  exit 0
+fi
+
+[ -x "$sweep" ] || { echo "error: cc-sweep not found/executable at $sweep" >&2; exit 1; }
+mkdir -p "$HOME/Library/LaunchAgents" /tmp/cc-notify
+
+cat > "$plist" <<PLIST
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>            <string>$LABEL</string>
+  <key>ProgramArguments</key> <array><string>$sweep</string></array>
+  <key>StartInterval</key>    <integer>$INTERVAL</integer>
+  <key>RunAtLoad</key>        <true/>
+  <key>ProcessType</key>      <string>Background</string>
+  <key>StandardErrorPath</key><string>/tmp/cc-notify/sweep-agent.log</string>
+</dict>
+</plist>
+PLIST
+
+# Reload cleanly (idempotent).
+unload
+if launchctl bootstrap "$domain" "$plist" 2>/dev/null || launchctl load "$plist" 2>/dev/null; then
+  echo "installed $LABEL → $sweep every ${INTERVAL}s"
+  echo "  (a tick only sweeps when you're not typing; throttled to 1/10s; queues if blocked)"
+else
+  echo "error: failed to load $plist" >&2; exit 1
+fi

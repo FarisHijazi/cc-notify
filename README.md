@@ -158,6 +158,18 @@ the last 3 s — read live from the OS, no daemon/permissions), and **queued** i
 blocked (it fires the moment you stop typing) — so it never interrupts you mid-type.
 Mouse movement doesn't block it.
 
+Hooks only fire on events (and only in sessions started after a plugin update), so
+for a steady heartbeat that repaints tabs even when nothing is happening, install the
+**30s sweep agent** (one-time):
+
+```bash
+"$HOME/.claude/plugins/marketplaces/farishijazi-plugins/plugins/cc-notify/bin/cc-install-sweep-agent"
+```
+
+It installs a launchd LaunchAgent that runs `cc-sweep` every 30s. Each tick obeys the
+same guards (throttled, skipped while typing, queued if blocked), so it's invisible
+while you work. Re-run it after a plugin update; `--uninstall` removes it.
+
 ## Toggle Stop notifications
 
 `Stop` fires the moment Claude is **fully done** — after every subagent has
