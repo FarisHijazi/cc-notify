@@ -170,6 +170,18 @@ It installs a launchd LaunchAgent that runs `cc-sweep` every 60s. Each tick obey
 same guards (throttled, skipped while typing, queued if blocked), so it's invisible
 while you work. Re-run it after a plugin update; `--uninstall` removes it.
 
+**Disable sweeping entirely** (tabs then only update on focus / the next turn in
+that window):
+
+```bash
+touch ~/.claude/notify.disable_sweep   # no more sweeps anywhere
+rm    ~/.claude/notify.disable_sweep   # re-enable
+```
+
+The flag is honored by the extension, `cc-sweep`, and the hook trigger. Reload the
+editor window once so the extension picks it up. (The heartbeat agent is separate —
+remove it with `cc-install-sweep-agent --uninstall`.)
+
 ## Toggle Stop notifications
 
 `Stop` fires the moment Claude is **fully done** — after every subagent has

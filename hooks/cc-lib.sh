@@ -211,6 +211,7 @@ try{fs.writeFileSync("/tmp/cc-notify/"+process.argv[1]+".tab",
 # typing, and queues if blocked (see bin/cc-sweep). Backgrounded so the hook returns
 # fast. cc-lib.sh lives in hooks/, so cc-sweep is ../bin/cc-sweep.
 cc_trigger_sweep() {
+  [ -f "$HOME/.claude/notify.disable_sweep" ] && return 0   # kill-switch
   local sweep
   sweep="$(cd "$(dirname "${BASH_SOURCE[0]}")/../bin" 2>/dev/null && pwd)/cc-sweep"
   [ -x "$sweep" ] && ( "$sweep" </dev/null >/dev/null 2>&1 & )
