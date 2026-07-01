@@ -2,6 +2,9 @@ const vscode = require('vscode');
 const fs = require('fs');
 
 const STATE_DIR = '/tmp/cc-notify'; // matches the hooks' state dir
+// Kill-switch: while this file exists, sweeps are fully disabled (the extension is
+// the actuator, so gating here stops ALL sweeps regardless of what touches .sweep).
+const DISABLE_SWEEP = `${process.env.HOME || ''}/.claude/notify.disable_sweep`;
 
 // Debug breadcrumb (also where cc-notify-doctor / tests look).
 function breadcrumb(line) {
@@ -114,6 +117,7 @@ function activate(context) {
   //       keystroke injection, no accessibility perms, no frontmost requirement). ──
   let sweeping = false;
   async function sweepThisWindow() {
+    if (fs.existsSync(DISABLE_SWEEP)) { breadcrumb('sweep disabled (~/.claude/notify.disable_sweep)'); return; }
     if (sweeping) return;
     sweeping = true;
     try {

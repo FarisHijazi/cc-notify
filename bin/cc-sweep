@@ -35,6 +35,9 @@ bin="$cache/cc-input-idle"
 
 mkdir -p "$STATE_DIR" "$cache"
 
+# Kill-switch: while this file exists, never sweep (matches the extension-side gate).
+[ -f "$HOME/.claude/notify.disable_sweep" ] && exit 0
+
 ensure_bin() {  # (re)compile the helper if missing or stale (swiftc ~1s)
   [ -x "$bin" ] && [ ! "$src" -nt "$bin" ] && return 0
   swiftc -O "$src" -o "$bin" 2>/dev/null
