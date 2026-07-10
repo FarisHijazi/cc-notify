@@ -6,9 +6,16 @@ set -euo pipefail
 
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ext_src="$(cd "$script_dir/../editor-extension" && pwd)"
-ext_id="farishijazi.cc-notify-focus-1.0.0"
 
 [ -f "$ext_src/package.json" ] || { echo "ext source not found: $ext_src" >&2; exit 1; }
+
+# The folder name MUST be <publisher>.<name>-<version> matching the manifest, or
+# the editor treats the unpacked extension as invalid and tries to reinstall it
+# from the marketplace by id → "cannot be installed because it was not found".
+# So derive the version straight from package.json instead of hardcoding it.
+ext_ver="$(sed -n 's/.*"version"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "$ext_src/package.json" | head -1)"
+[ -n "$ext_ver" ] || { echo "could not read version from $ext_src/package.json" >&2; exit 1; }
+ext_id="farishijazi.cc-notify-focus-$ext_ver"
 
 installed_any=0
 for ext_dir in "$HOME/.vscode/extensions" "$HOME/.cursor/extensions"; do
@@ -16,8 +23,28 @@ for ext_dir in "$HOME/.vscode/extensions" "$HOME/.cursor/extensions"; do
   # Only target editors that actually exist on this machine.
   [ -d "$parent" ] || continue
   mkdir -p "$ext_dir"
+  # Remove any prior cc-notify symlink (old version-suffixed names drift stale).
+  for old in "$ext_dir"/farishijazi.cc-notify-focus-*; do
+    [ -e "$old" ] || [ -L "$old" ] || continue
+    rm -rf "$old"
+  done
+  # Scrub the stale metadata-cache entry so the editor re-discovers cleanly and
+  # doesn't try to reinstall the old version from the marketplace.
+  cache="$ext_dir/extensions.json"
+  if [ -f "$cache" ] && command -v python3 >/dev/null 2>&1; then
+    python3 - "$cache" <<'PY' || true
+import json, sys
+p = sys.argv[1]
+try:
+    d = json.load(open(p))
+except Exception:
+    sys.exit(0)
+n = [e for e in d if 'cc-notify-focus' not in e.get('identifier', {}).get('id', '')]
+if len(n) != len(d):
+    json.dump(n, open(p, 'w'))
+PY
+  fi
   link="$ext_dir/$ext_id"
-  rm -rf "$link"
   ln -s "$ext_src" "$link"
   echo "linked → $link"
   installed_any=1
