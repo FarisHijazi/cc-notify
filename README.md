@@ -60,7 +60,7 @@ macOS doesn't natively let you click a notification banner with the keyboard. Th
       },
       "to": [
         {
-          "shell_command": "\"$HOME/.claude/plugins/marketplaces/farishijazi-plugins/plugins/cc-notify/bin/cc-banner-click\""
+          "shell_command": "bash -lc 'exec \"$(ls -dt \"$HOME\"/.claude/plugins/cache/farishijazi-plugins/cc-notify/*/bin/cc-banner-click | head -1)\"'"
         }
       ]
     }

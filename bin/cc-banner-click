@@ -70,12 +70,16 @@ done
 # Dismiss the banner only if focus actually succeeded.
 if [ "$focus_rc" = "0" ]; then
   # alerter --remove takes the group id; cc-notify groups as "cc-<session_id>".
+  # `--remove` is the ONLY thing that actually takes the banner off screen on macOS
+  # Tahoe: it tells the live worker to cleanly remove its own delivered notification
+  # and exit (@CLOSED, ~50ms). A raw pkill just SIGTERMs the worker and leaves the
+  # delivered banner behind — and pkill'ing IMMEDIATELY after --remove interrupts the
+  # ~50ms self-close, which is exactly the flaky "navigates but banner stays" bug.
+  # So: run --remove synchronously, then reap stragglers only AFTER a short grace
+  # delay (backgrounded so the hotkey stays snappy).
   alerter_bin=$(command -v alerter 2>/dev/null || echo /opt/homebrew/bin/alerter)
-  if [ -x "$alerter_bin" ]; then
-    "$alerter_bin" --remove "cc-$session_id" >/dev/null 2>&1 &
-  fi
-  # Belt-and-suspenders: kill the alerter process that's blocking on this group.
-  pkill -f "alerter.*cc-$session_id" 2>/dev/null
+  [ -x "$alerter_bin" ] && "$alerter_bin" --remove "cc-$session_id" >/dev/null 2>&1
+  ( sleep 0.3; pkill -f "alerter.*cc-$session_id" 2>/dev/null ) &
 fi
 
 exit "$focus_rc"
