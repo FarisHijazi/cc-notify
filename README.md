@@ -131,6 +131,7 @@ each message with a trailing emoji. Priority order (clearest → weakest):
 | bad news | 👎 |
 | work to be done | 🏃 |
 | just info | ℹ️ |
+| still waiting — nothing new (loop/poll/schedule tick; **fires no banner**) | 🥱 |
 
 Add the token rules to your `~/.claude/CLAUDE.md` (Claude appends the first that
 applies; cc-notify reads it on `Stop`). Without it, the done state is just 👀.

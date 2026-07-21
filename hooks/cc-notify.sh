@@ -100,6 +100,7 @@ else
     👍) subtitle="Good news" ;;
     👎) subtitle="Bad news" ;;
     🏃) subtitle="Work to be done" ;;
+    🥱) subtitle="Still waiting — nothing new"; notif_tab_only=1 ;;  # loop/poll/schedule tick → tab only, NO banner
     ℹ️) subtitle="FYI" ;;
     *)  subtitle="Turn complete" ;;
   esac
