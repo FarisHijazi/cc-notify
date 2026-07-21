@@ -27,6 +27,15 @@ image_args=()
 logo="$script_dir/../assets/claude-logo.png"
 [ -f "$logo" ] && image_args=(--content-image "$logo")
 
+# --timeout is how long this worker BLOCKS waiting for a click — and, crucially,
+# how long the notification stays REMOVABLE. On macOS Tahoe alerter can't purge an
+# already-delivered notification once its poster process has exited (`alerter --list`
+# returns empty; `--remove` only works by closing a still-LIVE worker). With the old
+# 120s timeout, replying >2min after a banner appeared left a dead worker → the
+# reply's `alerter --remove` was a no-op → the banner lingered. A long timeout keeps
+# the worker alive so a reply (UserPromptSubmit → --remove/pkill) reliably closes it.
+# Bounded (default 24h) so an abandoned session's worker self-cleans; one-per-session
+# via --group replacement + the kill-stale step in cc-notify.sh.
 result=$("$alerter_bin" \
   "${sender_args[@]}" \
   "${image_args[@]}" \
@@ -35,7 +44,7 @@ result=$("$alerter_bin" \
   --message  "$4" \
   --sound    "$5" \
   --group    "cc-$1" \
-  --timeout  120 \
+  --timeout  "${CC_BANNER_TIMEOUT:-86400}" \
   --ignore-dnd 2>/dev/null)
 
 case "$result" in

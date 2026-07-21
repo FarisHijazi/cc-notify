@@ -43,7 +43,11 @@ mkdir -p /tmp/cc-notify 2>/dev/null
 # Center and kill the bg alerter still waiting for a click. Detached/fast.
 if [ "$event" = "UserPromptSubmit" ]; then
   _al="$(command -v alerter 2>/dev/null || echo /opt/homebrew/bin/alerter)"
-  ( "$_al" --remove "cc-$session_id" >/dev/null 2>&1; pkill -f "alerter.*cc-$session_id" 2>/dev/null; ) &
+  # `--remove` cleanly self-closes the live worker (~50ms) — that's what removes the
+  # banner from screen on macOS Tahoe. Delay the pkill so it reaps stragglers WITHOUT
+  # interrupting that self-close (an immediate pkill SIGTERMs mid-removal → banner
+  # lingers). Detached so the hook returns fast.
+  ( "$_al" --remove "cc-$session_id" >/dev/null 2>&1; sleep 0.3; pkill -f "alerter.*cc-$session_id" 2>/dev/null; ) &
 fi
 
 # Map the event → status, and whether it needs a FULL (grep) update.
