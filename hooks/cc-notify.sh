@@ -177,6 +177,13 @@ fi
 # Stop, generic) while dropping the noisy idle one.
 [ -n "$notif_tab_only" ] && exit 0
 
+# One live worker per session. The bg worker now blocks for a long time (so a reply
+# can still close+remove the banner — see cc-notify-bg.sh), so kill any prior worker
+# for THIS session before posting the new one. The banner is replaced anyway via
+# --group; this just prevents process pileup and guarantees exactly one removable
+# worker per session. (First notification of a session → no-op.)
+pkill -f "alerter.*cc-${session_id:-default} " 2>/dev/null
+
 # Spawn the bg worker (the BANNER) fully detached: the outer subshell exits
 # immediately, orphaning bg to launchd. No quote-nesting, no nohup needed.
 ( bash "$script_dir/cc-notify-bg.sh" \

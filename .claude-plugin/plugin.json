@@ -1,7 +1,7 @@
 {
     "name": "cc-notify",
     "description": "Native macOS notifications + click-to-focus for Claude Code. Banners fire on Notification and Stop events; clicking navigates to the exact Terminal.app window, Aerospace workspace, and tmux session/window/pane. Also: per-session color/name, live status terminal tabs, and outcome tokens.",
-    "version": "1.7.10",
+    "version": "1.7.11",
     "author": {
         "name": "Faris Hijazi"
     },
