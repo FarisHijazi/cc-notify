@@ -121,7 +121,7 @@ each message with a trailing emoji. Priority order (clearest → weakest):
 
 | Outcome | Emoji |
 |---|---|
-| accident / disaster | 🚨 |
+| accident / disaster (**auto-focuses the session** — no click needed) | 🚨 |
 | all tasks done, nothing left | 💯✅ |
 | task completed | ✅ |
 | task failed | ❌ |
@@ -141,6 +141,12 @@ CLAUDE.md clean (Claude Code imports `@`-referenced files).
 
 cc-notify reads that trailing emoji from the transcript on `Stop`. Without it, the
 done state is just 👀 "your turn".
+
+**Emergency auto-focus**: the 🚨 token doesn't wait for you to click the banner —
+on `Stop` it immediately jumps you to the session (same routing as a banner click:
+window, Aerospace workspace, tmux pane). The banner still fires as the visible
+record. This runs even when Stop banners are disabled via
+`~/.claude/notify.disable_stop` — an emergency overrides everything.
 
 It's driven by a state file the extension watches (`/tmp/cc-notify/<sid>.tab`) —
 **no `open`/URL**, because opening a URL scheme activates the editor and steals

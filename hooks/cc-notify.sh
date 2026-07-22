@@ -146,6 +146,15 @@ route_file="$state_dir/${session_id:-default}.route"
   printf 'shell_pids=%q\n' "$shell_pids_all"
 } >"$route_file" 2>/dev/null
 
+# 🚨 EMERGENCY: don't wait for a banner click — jump straight to the session
+# (same path a click takes: cc-focus.sh reads the route file just written above).
+# Placed BEFORE the Stop gating on purpose: an emergency focuses even when the
+# Stop banner is kill-switched or suppress-when-focused. Detached so the hook
+# still returns fast; the banner below fires too as the visible record.
+if [ "$event_kind" = "stop" ] && [ "$status_emoji" = "🚨" ]; then
+  ( bash "$script_dir/cc-focus.sh" "${session_id:-default}" >>"$log" 2>&1 & )
+fi
+
 # Stop BANNER gating (the tab status above already updated, regardless). Both
 # opt-outs are off by default:
 #   notify.disable_stop          — kill-switch: never show the Stop banner.
