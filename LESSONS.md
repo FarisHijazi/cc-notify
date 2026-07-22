@@ -259,3 +259,31 @@ starts with ⏳, `cc_set_status` it to (transcript token via `cc_last_status_tok
 else `ℹ️`). Skip sessions whose transcript changed in the last ~45s — those are
 genuinely still running, and a ⏳ that reverts right after you "fix" it is the tell
 that the session is active, not stuck.
+
+## 19. A long banner `--timeout` × orphaned workers = multi-GB alerter RAM leak
+
+Each `alerter` banner is a **blocking ~30MB process** that lives for the whole
+`--timeout` (it exits cleanly at the end: `@TIMEOUT`). v1.7.11 raised the timeout
+`120s → 86400s` (24h) so a late reply could still `--remove` the banner (on Tahoe
+`--remove` only works by closing a *live* worker — see #14). The trap: `kill-stale`
+in `cc-notify.sh` (`pkill -f "alerter.*cc-<sid> "`) only matches the **same
+session_id**, so it dedups *within* a session but never reaps another session's
+worker. When a session **ends** (or you just walk away) with an unclicked banner,
+its alerter becomes an **orphan** — a new session has a new id, so nothing kills it,
+and at 24h it's a 30MB zombie for a full day. Across hundreds of sessions/day the
+orphans piled up to ~20GB RSS (~680 procs). With the old 120s timeout orphans
+self-died in 2 min so they never accumulated — the leak was *created* by the 24h
+bump, not present before.
+
+Symptom: `alerter` using tens of GB with **no single huge process** — it's hundreds
+of ~30MB processes. `ps -eo rss,command | awk '/\/alerter /{r+=$1;n++}END{print n, r/1024/1024" MB"}'`.
+
+Fix (v1.7.13): (a) reap the session's worker on **SessionEnd** too, not just
+UserPromptSubmit (`cc-capture-window.sh` — the precise cleanup); (b) drop the
+default timeout `86400 → 600` (10min) — still 5× longer than the 120s that was too
+short to cover real reply windows, but bounds a walk-away orphan to minutes instead
+of a day. Peak concurrent alerter RAM is now ≈ (sessions with a banner in the last
+10min) × 30MB, self-limiting. **Rule: a per-item blocking helper's timeout is a
+memory multiplier — `timeout × peak concurrent items`. Any long-lived-process design
+needs an owner that reaps it on *every* exit path (here: reply AND session end), not
+just the happy one.**
