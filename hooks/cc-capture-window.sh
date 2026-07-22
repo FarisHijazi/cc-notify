@@ -38,17 +38,25 @@ let d="";process.stdin.on("data",c=>d+=c).on("end",()=>{
 
 mkdir -p /tmp/cc-notify 2>/dev/null
 
-# You just responded to this session (sent a prompt) → you've clearly seen it, so
-# clear any pending notification banner for it: dismiss it from Notification
-# Center and kill the bg alerter still waiting for a click. Detached/fast.
-if [ "$event" = "UserPromptSubmit" ]; then
-  _al="$(command -v alerter 2>/dev/null || echo /opt/homebrew/bin/alerter)"
-  # `--remove` cleanly self-closes the live worker (~50ms) — that's what removes the
-  # banner from screen on macOS Tahoe. Delay the pkill so it reaps stragglers WITHOUT
-  # interrupting that self-close (an immediate pkill SIGTERMs mid-removal → banner
-  # lingers). Detached so the hook returns fast.
-  ( "$_al" --remove "cc-$session_id" >/dev/null 2>&1; sleep 0.3; pkill -f "alerter.*cc-$session_id" 2>/dev/null; ) &
-fi
+# Clear this session's pending banner + reap its bg alerter worker on:
+#   • UserPromptSubmit — you responded, so you've clearly seen it.
+#   • SessionEnd       — the session is gone; its banner worker MUST be reaped or it
+#                        becomes an ORPHAN (kill-stale in cc-notify.sh only matches
+#                        the SAME session_id, and a new session has a new id → the
+#                        dead session's worker is never killed). With the banner
+#                        timeout at minutes this self-heals, but reaping on SessionEnd
+#                        frees the ~30MB immediately instead of waiting it out. This is
+#                        the accumulation that ballooned alerter RAM (see LESSONS #19).
+case "$event" in
+  UserPromptSubmit|SessionEnd)
+    _al="$(command -v alerter 2>/dev/null || echo /opt/homebrew/bin/alerter)"
+    # `--remove` cleanly self-closes the live worker (~50ms) — that's what removes the
+    # banner from screen on macOS Tahoe. Delay the pkill so it reaps stragglers WITHOUT
+    # interrupting that self-close (an immediate pkill SIGTERMs mid-removal → banner
+    # lingers). Detached so the hook returns fast.
+    ( "$_al" --remove "cc-$session_id" >/dev/null 2>&1; sleep 0.3; pkill -f "alerter.*cc-$session_id" 2>/dev/null; ) &
+    ;;
+esac
 
 # Map the event → status, and whether it needs a FULL (grep) update.
 # AskUserQuestion is a TOOL (no Notification fires for its menu), so PreToolUse is

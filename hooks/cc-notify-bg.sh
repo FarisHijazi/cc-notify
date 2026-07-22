@@ -27,15 +27,18 @@ image_args=()
 logo="$script_dir/../assets/claude-logo.png"
 [ -f "$logo" ] && image_args=(--content-image "$logo")
 
-# --timeout is how long this worker BLOCKS waiting for a click — and, crucially,
-# how long the notification stays REMOVABLE. On macOS Tahoe alerter can't purge an
-# already-delivered notification once its poster process has exited (`alerter --list`
-# returns empty; `--remove` only works by closing a still-LIVE worker). With the old
-# 120s timeout, replying >2min after a banner appeared left a dead worker → the
-# reply's `alerter --remove` was a no-op → the banner lingered. A long timeout keeps
-# the worker alive so a reply (UserPromptSubmit → --remove/pkill) reliably closes it.
-# Bounded (default 24h) so an abandoned session's worker self-cleans; one-per-session
-# via --group replacement + the kill-stale step in cc-notify.sh.
+# --timeout is how long this worker BLOCKS waiting for a click — and, crucially, both
+# (a) how long the notification stays REMOVABLE and (b) how long this ~30MB process
+# lives. On macOS Tahoe alerter can't purge an already-delivered notification once its
+# poster has exited (`alerter --list` returns empty; `--remove` only works by closing a
+# still-LIVE worker). So a longer timeout keeps a reply (UserPromptSubmit → --remove)
+# able to clear the banner — BUT every unclicked banner holds the process for the whole
+# timeout, and a session that ENDS with a live banner ORPHANS its worker (kill-stale in
+# cc-notify.sh only matches the same session_id). At 24h those orphans piled up to
+# multi-GB of alerter RAM (see LESSONS #19). 10min balances the two: it covers any
+# realistic reply window (the 120s default was too short — that was the v1.7.11 bug)
+# while bounding an orphan's lifetime to minutes. SessionEnd also reaps the worker
+# immediately (cc-capture-window.sh). Override via CC_BANNER_TIMEOUT.
 result=$("$alerter_bin" \
   "${sender_args[@]}" \
   "${image_args[@]}" \
@@ -44,7 +47,7 @@ result=$("$alerter_bin" \
   --message  "$4" \
   --sound    "$5" \
   --group    "cc-$1" \
-  --timeout  "${CC_BANNER_TIMEOUT:-86400}" \
+  --timeout  "${CC_BANNER_TIMEOUT:-600}" \
   --ignore-dnd 2>/dev/null)
 
 case "$result" in
