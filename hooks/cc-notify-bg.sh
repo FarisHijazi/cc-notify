@@ -35,10 +35,12 @@ logo="$script_dir/../assets/claude-logo.png"
 # able to clear the banner — BUT every unclicked banner holds the process for the whole
 # timeout, and a session that ENDS with a live banner ORPHANS its worker (kill-stale in
 # cc-notify.sh only matches the same session_id). At 24h those orphans piled up to
-# multi-GB of alerter RAM (see LESSONS #19). 10min balances the two: it covers any
-# realistic reply window (the 120s default was too short — that was the v1.7.11 bug)
-# while bounding an orphan's lifetime to minutes. SessionEnd also reaps the worker
-# immediately (cc-capture-window.sh). Override via CC_BANNER_TIMEOUT.
+# multi-GB of alerter RAM (see LESSONS #19). Back to 120s: a session that ends with a
+# live banner is reaped immediately by the SessionEnd hook (cc-capture-window.sh), and
+# 120s caps any un-reaped walk-away orphan to 2min — so the real orphan fix is the
+# SessionEnd reap, not a long timeout. Trade-off: a reply >120s after the banner
+# appeared can't --remove an already-exited worker, so that stale banner lingers until
+# dismissed. Override via CC_BANNER_TIMEOUT if you want a longer removal window.
 result=$("$alerter_bin" \
   "${sender_args[@]}" \
   "${image_args[@]}" \
@@ -47,7 +49,7 @@ result=$("$alerter_bin" \
   --message  "$4" \
   --sound    "$5" \
   --group    "cc-$1" \
-  --timeout  "${CC_BANNER_TIMEOUT:-600}" \
+  --timeout  "${CC_BANNER_TIMEOUT:-120}" \
   --ignore-dnd 2>/dev/null)
 
 case "$result" in

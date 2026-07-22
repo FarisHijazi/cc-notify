@@ -279,11 +279,14 @@ Symptom: `alerter` using tens of GB with **no single huge process** — it's hun
 of ~30MB processes. `ps -eo rss,command | awk '/\/alerter /{r+=$1;n++}END{print n, r/1024/1024" MB"}'`.
 
 Fix (v1.7.13): (a) reap the session's worker on **SessionEnd** too, not just
-UserPromptSubmit (`cc-capture-window.sh` — the precise cleanup); (b) drop the
-default timeout `86400 → 600` (10min) — still 5× longer than the 120s that was too
-short to cover real reply windows, but bounds a walk-away orphan to minutes instead
-of a day. Peak concurrent alerter RAM is now ≈ (sessions with a banner in the last
-10min) × 30MB, self-limiting. **Rule: a per-item blocking helper's timeout is a
-memory multiplier — `timeout × peak concurrent items`. Any long-lived-process design
-needs an owner that reaps it on *every* exit path (here: reply AND session end), not
-just the happy one.**
+UserPromptSubmit (`cc-capture-window.sh` — the precise cleanup); (b) restore the
+default timeout `86400 → 120` (env `CC_BANNER_TIMEOUT`) so any un-reaped walk-away
+orphan self-dies in 2min. The **SessionEnd reap is the real orphan fix**; the short
+timeout is the backstop. Trade-off: a reply >120s after the banner appeared can't
+`--remove` an already-exited worker → that stale banner lingers (raise
+`CC_BANNER_TIMEOUT` if you want a longer removal window, but note the RAM cost).
+Peak concurrent alerter RAM is now ≈ (sessions with a banner in the last 2min) ×
+30MB, self-limiting. **Rule: a per-item blocking helper's timeout is a memory
+multiplier — `timeout × peak concurrent items`. Any long-lived-process design needs
+an owner that reaps it on *every* exit path (here: reply AND session end), not just
+the happy one.**
