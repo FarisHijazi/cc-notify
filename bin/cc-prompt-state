@@ -1,0 +1,97 @@
+#!/usr/bin/env bash
+# cc-prompt-state — read the Claude Code TUI input box of a tmux pane.
+#
+# Answers "is the user typing right now?" — which nothing else can tell you:
+# there is no hook, env var, or API for in-progress (unsubmitted) input. The
+# only observable is what the TUI has drawn, so we read the pane.
+#
+#   cc-prompt-state <tmux-target>
+#       stdout: the input box text ("" when empty)
+#       exit 0 = box found and EMPTY   (safe to send-keys into)
+#            1 = box found and has TEXT (user is typing — do NOT send-keys)
+#            2 = no input box found     (menu/dialog open, not a Claude TUI,
+#                                        or capture failed) — also unsafe
+#
+#   cc-prompt-state --watch <tmux-target> [timeout_sec] [poll_sec]
+#       Blocks until the input box content CHANGES from what it was at start
+#       (i.e. the user typed/deleted something), then exits 0.
+#       exit 0 = changed (user is interacting), 1 = timed out, 2 = target gone
+#
+# How the box is located: Claude Code draws the input as a region bounded by two
+# horizontal-rule lines at the bottom of the pane, with the first row prefixed
+# by "❯". We take the region between the last two rules — which is why a menu
+# (AskUserQuestion) or a permission dialog reports "no input box" rather than
+# being mistaken for an empty prompt.
+set -uo pipefail
+
+# Detached callers (the banner worker) may not inherit a full PATH.
+command -v tmux >/dev/null 2>&1 || PATH="/opt/homebrew/bin:/usr/local/bin:$PATH"
+
+RULE=$'─'    # ─ box border
+MARK=$'❯'    # ❯ prompt marker
+
+# Print the input box content of $1; return 0 found / 2 not found.
+box_text() {
+  local pane i n d2=-1 d1=-1 line out=""
+  pane="$(tmux capture-pane -p -t "$1" 2>/dev/null)" || return 2
+  [ -n "$pane" ] || return 2
+
+  local -a L=()
+  while IFS= read -r line; do L[${#L[@]}]="$line"; done <<EOF
+$pane
+EOF
+  n=${#L[@]}
+  [ "$n" -gt 0 ] || return 2
+
+  # last two rule lines, searching only the bottom of the screen
+  local floor=$(( n - 12 )); [ "$floor" -lt 0 ] && floor=0
+  for (( i = n - 1; i >= floor; i-- )); do
+    case "${L[$i]}" in
+      "$RULE"*)
+        if [ "$d2" -lt 0 ]; then d2=$i; else d1=$i; break; fi ;;
+    esac
+  done
+  [ "$d1" -ge 0 ] && [ "$d2" -gt "$d1" ] || return 2
+
+  # first row of the region must carry the prompt marker, else it's not the
+  # input box (a menu's selection cursor lives outside this bracket)
+  case "${L[$(( d1 + 1 ))]}" in "$MARK"*) ;; *) return 2 ;; esac
+
+  for (( i = d1 + 1; i < d2; i++ )); do
+    line="${L[$i]}"
+    [ "$i" -eq $(( d1 + 1 )) ] && line="${line#$MARK}"
+    out="$out$line"
+  done
+  printf '%s' "$out"
+}
+
+# trim surrounding whitespace (the box pads the row), so whitespace-only → ""
+# and callers can compare the result to exactly what they meant to type
+normalize() {
+  local s="$1"
+  s="${s#"${s%%[![:space:]]*}"}"
+  s="${s%"${s##*[![:space:]]}"}"
+  printf '%s' "$s"
+}
+
+if [ "${1:-}" = "--watch" ]; then
+  target="${2:-}"; timeout="${3:-120}"; poll="${4:-1}"
+  [ -n "$target" ] || { echo "usage: cc-prompt-state --watch <target> [timeout] [poll]" >&2; exit 2; }
+  base="$(box_text "$target")" || exit 2
+  base="$(normalize "$base")"
+  waited=0
+  while [ "$waited" -lt "$timeout" ]; do
+    sleep "$poll"
+    waited=$(( waited + poll ))
+    cur="$(box_text "$target")" || exit 2   # pane vanished
+    [ "$(normalize "$cur")" != "$base" ] && exit 0
+  done
+  exit 1
+fi
+
+target="${1:-}"
+[ -n "$target" ] || { echo "usage: cc-prompt-state <tmux-target> | --watch <target>" >&2; exit 2; }
+text="$(box_text "$target")" || exit 2
+text="$(normalize "$text")"
+printf '%s' "$text"
+[ -z "$text" ]

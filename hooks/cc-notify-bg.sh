@@ -41,6 +41,32 @@ logo="$script_dir/../assets/claude-logo.png"
 # SessionEnd reap, not a long timeout. Trade-off: a reply >120s after the banner
 # appeared can't --remove an already-exited worker, so that stale banner lingers until
 # dismissed. Override via CC_BANNER_TIMEOUT if you want a longer removal window.
+timeout="${CC_BANNER_TIMEOUT:-120}"
+
+# Dismiss-on-typing: if you start typing in the session the banner came from,
+# you've plainly seen it — clear it now instead of waiting for you to submit
+# (UserPromptSubmit) or click. Unsubmitted input isn't exposed by any hook, so
+# cc-prompt-state reads the input box off the tmux pane; it fires on the first
+# CHANGE from what was there when the banner appeared, so text you'd already
+# typed doesn't count. Only works for tmux-hosted sessions; everything else
+# keeps the reply/click paths. Off switch: CC_NO_TYPE_DISMISS=1.
+watcher=
+prompt_state="$script_dir/../bin/cc-prompt-state"
+tmux_target=$(sed -n 's/^tmux_target=//p' "/tmp/cc-notify/$1.route" 2>/dev/null | head -1)
+if [ -z "${CC_NO_TYPE_DISMISS:-}" ] && [ -n "$tmux_target" ] && [ -x "$prompt_state" ]; then
+  (
+    if "$prompt_state" --watch "$tmux_target" "$timeout" "${CC_TYPE_POLL:-1}"; then
+      # --remove works by telling the LIVE worker to self-close its delivered
+      # notification (~50ms); pkill it too early and the removal aborts with the
+      # banner still on screen. Same ordering as the click/reply paths (LESSONS #11).
+      "$alerter_bin" --remove "cc-$1" >/dev/null 2>&1
+      sleep 0.3
+      pkill -f "alerter.*cc-$1 " 2>/dev/null
+    fi
+  ) &
+  watcher=$!
+fi
+
 result=$("$alerter_bin" \
   "${sender_args[@]}" \
   "${image_args[@]}" \
@@ -49,8 +75,11 @@ result=$("$alerter_bin" \
   --message  "$4" \
   --sound    "$5" \
   --group    "cc-$1" \
-  --timeout  "${CC_BANNER_TIMEOUT:-120}" \
+  --timeout  "$timeout" \
   --ignore-dnd 2>/dev/null)
+
+# Banner is gone (clicked, dismissed, or timed out) — never leave the poller behind.
+[ -n "$watcher" ] && kill "$watcher" 2>/dev/null
 
 case "$result" in
   *CONTENTCLICKED*|*contentClicked*|*ACTIONCLICKED*|*actionClicked*)
