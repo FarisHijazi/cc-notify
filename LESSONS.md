@@ -290,3 +290,42 @@ Peak concurrent alerter RAM is now ≈ (sessions with a banner in the last 2min)
 multiplier — `timeout × peak concurrent items`. Any long-lived-process design needs
 an owner that reaps it on *every* exit path (here: reply AND session end), not just
 the happy one.**
+
+## 20. Unsubmitted TUI input is invisible to hooks — read the pane, and let a menu look like a menu
+
+Anything that types into a Claude Code session with `tmux send-keys` (an
+auto-`/compact` hook, an auto-continue, any nudge) will happily append its text
+to a half-written message and submit the whole thing. Claude Code exposes
+**nothing** for in-progress input: no hook fires on a keystroke, no env var or
+file holds the draft, and `UserPromptSubmit` is by definition too late. The only
+observable is **what the TUI has drawn**, so read it: `tmux capture-pane -p -t <target>`.
+
+**Locating the input box — don't grep for `❯`.** The obvious check ("last line
+starting with `❯`, is there text after it?") has a dangerous false positive: an
+**AskUserQuestion menu uses `❯` as its selection cursor**, so an open menu reads
+as "prompt with text", and worse, other dialog states read as an empty prompt.
+Instead match the box *structurally*: it is the region between the **last two
+horizontal-rule (`─`) lines** at the bottom of the screen, whose first row starts
+with `❯`. A menu's cursor isn't bracketed that way, so it correctly reports "no
+input box" — which callers must treat as **unsafe to type into**, not as empty.
+This also handles multi-line drafts (the whole region is the content) and
+survives the slash-command autocomplete popup, which renders *above* the box and
+leaves the region intact (verified: typing `/compact` still reads back exactly
+`/compact`).
+
+**Check twice, and never "clean up".** Between the emptiness check and the
+`Enter` there is a real (if small) window for a keystroke. So: check empty →
+send the text literally → **re-read the box and confirm it holds exactly what you
+typed** → only then send `Enter`. On a mismatch, abort and leave the text sitting
+there unsent. Do NOT try to erase it with `BSpace` — backspaces delete from the
+cursor backwards, which is precisely the characters the user just typed. An
+unsent stray `/compact` is visible and harmless; eating their input is not.
+
+**Fail closed.** If the box can't be read at all (helper missing, not tmux, pane
+gone), do nothing. A skipped compaction is recoverable on the next turn; a
+mangled and submitted message isn't.
+
+The same primitive answers "is the user typing *right now*" for anything else
+that wants it — cc-notify uses `cc-prompt-state --watch` to clear a banner on
+the first keystroke, comparing against a snapshot taken when the banner appeared
+so a pre-existing draft doesn't count as a fresh keystroke.

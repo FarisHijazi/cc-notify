@@ -189,6 +189,29 @@ The flag is honored by the extension, `cc-sweep`, and the hook trigger. Reload t
 editor window once so the extension picks it up. (The heartbeat agent is separate —
 remove it with `cc-install-sweep-agent --uninstall`.)
 
+## Banners clear when you start typing
+
+![A Claude Code notification banner crossed out above a session whose input box has half-typed text](assets/typing-dismiss.png)
+
+A banner is cleared as soon as you **start typing in the session it came from** —
+you've obviously seen it, so it shouldn't sit there until you submit or click.
+
+Claude Code doesn't expose *unsubmitted* input to any hook or API, so cc-notify
+reads the input box off the tmux pane (`bin/cc-prompt-state`). It only counts a
+**change** from what was in the box when the banner appeared, so text you'd
+already typed doesn't dismiss it instantly. This needs the session to be running
+inside tmux; elsewhere the banner still clears on reply or click.
+
+```bash
+CC_NO_TYPE_DISMISS=1   # turn it off
+CC_TYPE_POLL=2         # seconds between checks (default 1)
+```
+
+The same helper is what lets a "type something into this session" automation
+know when to keep its hands off — it reports *empty* / *user is typing* / *no
+input box at all* (an AskUserQuestion menu or permission dialog), so nothing
+gets typed into a menu or appended to a half-written message.
+
 ## Toggle Stop notifications
 
 `Stop` fires the moment Claude is **fully done** — after every subagent has
