@@ -73,10 +73,27 @@ The awk tracks dim via 2/22 and colour via 30-37/90-97/38/39, resetting both on
 Exit-code contract unchanged. No regression: nothing that was safe became
 unsafe, and three panes that were wrongly unsafe are now correctly safe.
 
-## Not done here
+## Shipped as v1.7.18
 
-Version not bumped and nothing committed — this tree is mid-v1.8.0 with a dozen
-files already modified. The same patch was applied to the live plugin cache copy
-(`plugins/cache/*/cc-notify/1.7.17/bin/cc-prompt-state`) so the fix is effective
-immediately; that copy is disposable and will be replaced by the next install,
-which is why the durable fix is a release from here.
+Released the fix on its own rather than waiting for v1.8.0: this tree is
+mid-v1.8.0 with ~18 other dirty entries, and the bug silently disables every
+send-keys consumer in the meantime.
+
+How a release works here, since nothing records it: the marketplace
+`farishijazi-plugins` (repo `FarisHijazi/claude-plugins`) points this plugin at
+`github:FarisHijazi/cc-notify` with **no version or tag pin**, so it tracks
+`main`'s HEAD — pushing to `main` *is* the release. The repo carries no tags at
+all. `~/.claude/plugins/cache/farishijazi-plugins/cc-notify/<version>/bin` is
+what lands on `$PATH`, and the dir is named by `plugin.json`'s `version`, which
+is why the bump matters: without it the new code would overwrite the `1.7.17`
+dir and two different states would share one name.
+
+Only `.claude-plugin/plugin.json` (version line), `bin/cc-prompt-state` and this
+devlog went into the commit; the v1.8.0 work (including plugin.json's own bump to
+1.8.0 and its new description) stayed uncommitted in the tree, restored
+afterwards. Then `claude plugin update cc-notify` -> cache dir `1.7.18`, verified
+carrying the fix and correct on all 6 live panes.
+
+Note: the update left `installed_plugins.json`'s `gitCommitSha` at the old
+`e669259` while `version`/`installPath` moved to 1.7.18 — Claude Code's
+bookkeeping, harmless (worst case a future `update` re-fetches).
