@@ -22,6 +22,7 @@ That's the whole core — you'll now get clickable banners. Optional extras:
    `"$HOME/.claude/plugins/marketplaces/farishijazi-plugins/plugins/cc-notify/bin/cc-install-editor-extension"`, then reload the editor window. ([details](#optional-focus-the-exact-vs-code--cursor-terminal-pane))
 2. **Keyboard hotkey** to "click" the latest banner — [Karabiner rule](#optional-keyboard-hotkey-to-click-the-latest-banner).
 3. **Outcome emojis** (✅/❌/👍/👎/💬 on the banner + tab) — add the [token instruction](#per-session-color--name) to `~/.claude/CLAUDE.md`.
+4. **Remote sessions over SSH** — banners + click-to-focus for Claude Code running on other machines: [setup](#remote-sessions-over-ssh).
 
 To verify / debug: `bin/cc-notify-doctor`. After a plugin update, re-run `bin/cc-install-editor-extension` if you use the extension.
 
@@ -189,6 +190,37 @@ The flag is honored by the extension, `cc-sweep`, and the hook trigger. Reload t
 editor window once so the extension picks it up. (The heartbeat agent is separate —
 remove it with `cc-install-sweep-agent --uninstall`.)
 
+## Per-project color (`.cc/settings.json`)
+
+Claude Code has **no programmatic API for the session color** — no CLI flag for
+a running session, no env var, no settings key, no hook field (all have open
+feature requests). But the `/color` slash command accepts an inline argument, so
+cc-notify syncs color through the session's own input box:
+
+- Whenever you `/color` a session, its hooks persist the choice to
+  `<project>/.cc/settings.json` as `{"color": "purple"}` (folder auto-created;
+  other keys in the file are preserved; the last active session in a project
+  wins).
+- On **SessionStart**, if that file's color differs from the session's, cc-notify
+  types `/color <name>` into the session's own tmux pane — so every new session
+  in the project comes up in the project's color automatically.
+
+The typing uses the same safety dance as [banner dismiss-on-typing](#banners-clear-when-you-start-typing)
+(`bin/cc-prompt-state`): it only ever types into an **empty** input box, verifies
+the box holds exactly the command before pressing Enter, and backs off entirely
+if you're typing or a menu/dialog is open. tmux-hosted sessions only. You'll see
+the `/color <name>` flash by as a submitted command at session start — that's it
+working. Add `.cc/` to your `.gitignore`.
+
+```bash
+CC_NO_COLOR_SYNC=1                            # env off-switch
+touch ~/.claude/notify.disable_color_sync     # file off-switch
+CC_COLOR_APPLY_TIMEOUT=25                     # how long to wait for the input box
+```
+
+You can also just edit `.cc/settings.json` by hand — any of
+`red orange yellow green blue purple pink cyan default`.
+
 ## Banners clear when you start typing
 
 ![A Claude Code notification banner crossed out above a session whose input box has half-typed text](assets/typing-dismiss.png)
@@ -211,6 +243,83 @@ The same helper is what lets a "type something into this session" automation
 know when to keep its hands off — it reports *empty* / *user is typing* / *no
 input box at all* (an AskUserQuestion menu or permission dialog), so nothing
 gets typed into a menu or appended to a half-written message.
+
+## Remote sessions over SSH
+
+Claude Code running on another machine can notify this Mac, and clicking the
+banner lands you in the session — same as a local one.
+
+It leans on [tmux-watch](https://github.com/FarisHijazi/tmux-watch), which
+already tiles remote tmux sessions into a local hub and tags each pane with
+`@tw-src = "<host>\t<session>"`. That tag is a stable address for "the local
+pane showing that remote session", so all cc-notify has to add is a one-way
+event stream.
+
+```bash
+bin/cc-install-remote <host> [host...]   # remote half: 2 files + hook registration
+bin/cc-install-remote-agent              # local half: keeps the listener running
+tmux-watch <host>:<path>                 # so clicks have somewhere to land
+```
+
+Run remote Claude sessions **inside remote tmux** — that is what makes the click
+routable. Requirements on the remote: `bash`, `tmux`, key-based ssh. No node, jq
+or python needed there; all JSON work happens on the Mac.
+
+### How it flows
+
+1. The remote's hooks (`hooks/cc-remote-emit.sh`, installed to
+   `~/.claude/cc-notify/`) append one JSON line per event to
+   `~/.claude/cc-events.jsonl`. They decide nothing — they report facts only its
+   own machine knows: the transcript's colour, title and outcome token, its
+   tmux coordinates, the cwd and branch.
+2. `bin/cc-remote-bridge` on the Mac holds an ssh connection per host running
+   `tail -F` on that file, and stamps each event with **the ssh alias you
+   connect with** — which is why identity translation has exactly one home (the
+   remote knows only its own hostname; the local pane is keyed by the alias).
+3. Each event becomes the same banner a local session produces (shared
+   presentation code, so the vocabulary can't drift), plus a route file for the
+   click handler, plus a live status on the hub pane's border.
+4. Clicking re-resolves the pane **at click time** from `@tw-src` — panes come
+   and go — then focuses it exactly as a local session: Aerospace window, tmux
+   session/window/pane. If nothing on this Mac is showing the session, it opens
+   a Terminal window attached to it instead.
+
+The hub pane border becomes a status board: `⏳ 🟢 deploy api` for a remote
+session, exactly like the terminal-tab titles local sessions get (a remote
+session has no local terminal tab, so the border is its equivalent). Local
+sessions tiled into a hub get it too.
+
+Everything else follows for free: 🚨 still auto-focuses, replying still clears
+the banner, and dismiss-on-typing works because the hub pane *is* the pane you
+type into.
+
+### Operating it
+
+```bash
+bin/cc-remote-bridge --hosts    # which hosts are being bridged and why
+bin/cc-notify-doctor            # section 7 shows streamers, hub panes, statuses
+tail -f /tmp/cc-notify/remote-bridge.log
+```
+
+Hosts are **discovered**, not configured: any host with a tmux-watch pane on
+this Mac is bridged. Pin extra ones (or hosts you have no hub for) in
+`~/.claude/notify.remote-hosts`, one per line.
+
+```bash
+touch ~/.claude/notify.disable_remote   # stop bridging (local half)
+bin/cc-install-remote-agent --uninstall # remove the launchd agent
+bin/cc-install-remote --uninstall <host>  # remove the remote half entirely
+```
+
+Reconnects are automatic, and on reconnect the last 60s of events are replayed
+so a blip doesn't swallow a "done" ping — already-handled events are suppressed
+by timestamp, so nothing fires twice. The remote's hooks are registered in its
+`~/.claude/settings.json` (backed up to `settings.json.cc-bak`; existing hooks
+are preserved, and `--uninstall` removes only cc-notify's).
+
+**Trust note:** event lines are treated as untrusted text from another machine —
+parsed as JSON into shell variables, never evaluated, and a remote session name
+is only used to open a window if it is a plain tmux name.
 
 ## Toggle Stop notifications
 
@@ -244,9 +353,10 @@ ping); it's low-signal and noisy, and the instant `Stop` ping already covers "do
 | Terminal | Behavior |
 |---|---|
 | **Terminal.app + tmux** | AppleScript-by-tty finds the exact window/tab, Aerospace switches workspace, `tmux switch-client` + `select-window` + `select-pane` jumps the pane. |
-| **iTerm2 / Ghostty + tmux** | `open -a` + tmux jump. |
+| **Ghostty + tmux** | Captured Aerospace window id (local) or, for a remote session, Ghostty's AppleScript dictionary (1.3+): the tab whose name is the tmux title (`set-titles on` with a stable `set-titles-string`, see the dotfiles `.tmux.conf`) is focused, then Aerospace switches workspace by that title, then tmux jump. A remote session nothing is showing opens in a new Ghostty window via AppleScript `new window with configuration` (never `open -na`, which spawns a second Ghostty process). |
+| **iTerm2 + tmux** | `open -a` + tmux jump. |
 | **VS Code / Cursor integrated terminal** | Focuses the existing editor window whose workspace folder matches `cwd` (exact, then closest parent dir) via Aerospace — no `--reuse-window` (which would re-open a sub-folder as a new view). **With the [companion extension](#optional-focus-the-exact-vs-code--cursor-terminal-pane) installed, it also focuses the exact integrated terminal pane** Claude runs in. |
-| **SSH session on remote** | Bell + line appended to remote `~/.claude/inbox.log`. No Mac notification crosses the wire by design. |
+| **Claude Code on a remote box (SSH)** | The remote's hooks append events to a file; this Mac streams it over ssh and fires the same banner. Clicking focuses the local tmux-watch hub pane showing that session — or opens a Terminal attached to it if nothing is showing it. See [Remote sessions](#remote-sessions-over-ssh). |
 
 ## Why alerter and not `osascript`
 

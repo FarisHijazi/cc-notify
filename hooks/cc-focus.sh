@@ -9,6 +9,50 @@ route_file="/tmp/cc-notify/${session_id}.route"
 [ -f "$route_file" ] || { echo "no route file: $route_file"; exit 0; }
 # shellcheck disable=SC1090
 . "$route_file"
+# shellcheck disable=SC1091
+. "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/cc-lib.sh"
+
+# Remote session (bridged by bin/cc-remote-bridge): the route's local coordinates
+# were resolved when the event fired, and panes come and go — so re-resolve NOW
+# from the stable key (tmux-watch's @tw-src = "<host>\t<session>") and rebuild the
+# routing from the pane that is displaying it. Everything below then runs exactly
+# as it does for a local session.
+if [ -n "${remote_host:-}" ]; then
+  remote_sess="${remote_tmux%%:*}"
+  pane=$(cc_hub_pane "$remote_host" "$remote_sess")
+  if [ -n "$pane" ] && cc_pane_route "$pane"; then
+    term="$CC_TERM"; tmux_target="$CC_TMUX_TARGET"; client_tty="$CC_CLIENT_TTY"
+    gui_pid="$CC_GUI_PID"; editor_app="$CC_EDITOR_APP"; shell_pids="$CC_SHELL_PIDS"
+    target_wid=$(cc_wid_for_tty "$CC_CLIENT_TTY" "$CC_GUI_PID" "$CC_TERM")
+  else
+    # Nothing on this Mac is showing it — materialize the view. A click is an
+    # explicit user action, so opening a window is what they asked for. The
+    # session name comes from another machine: only ever pass a plain tmux name.
+    case "$remote_sess" in
+      ""|*[!A-Za-z0-9._-]*) echo "remote session name not addressable: '$remote_sess'"; exit 1 ;;
+    esac
+    # Open it in Ghostty when it is installed (its AppleScript dictionary makes a
+    # window in the RUNNING instance and launches the app if needed — never
+    # `open -na … --args`, which spawns a whole new Ghostty process per call),
+    # else in Terminal.app.
+    if [ -d /Applications/Ghostty.app ]; then
+      osascript >/dev/null 2>&1 <<OSA || exit 1
+tell application "Ghostty"
+  set cfg to new surface configuration
+  set command of cfg to "ssh -t ${remote_host} tmux attach -t ${remote_sess}"
+  new window with configuration cfg
+  activate
+end tell
+OSA
+      echo "materialized remote session ${remote_host}:${remote_sess} in a new Ghostty window"
+    else
+      osascript -e "tell application \"Terminal\" to do script \"ssh -t ${remote_host} tmux attach -t ${remote_sess}\"" \
+                -e 'tell application "Terminal" to activate' >/dev/null 2>&1 || exit 1
+      echo "materialized remote session ${remote_host}:${remote_sess} in a new Terminal window"
+    fi
+    exit 0
+  fi
+fi
 
 # Focus via Aerospace. Prefer the explicitly-captured target_wid (captured at
 # SessionStart/UserPromptSubmit when the user was reliably looking at the
@@ -176,6 +220,9 @@ OSA
     ;;
 
   ghostty)
+    # Exact window came from target_wid (captured at SessionStart) or, for a
+    # remote session, from the tmux-title match in cc_wid_for_tty. Nothing
+    # finer exists: Ghostty has no AppleScript dictionary for windows/tabs.
     [ -z "$aerospace_focused" ] && { open -a Ghostty 2>/dev/null && focused=1; }
     sleep 0.15
     tmux_jump

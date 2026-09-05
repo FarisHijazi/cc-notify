@@ -1,0 +1,110 @@
+#!/usr/bin/env bash
+# cc-install-remote — install (or remove) the remote half of cc-notify on one or
+# more ssh hosts, so their Claude Code sessions notify THIS Mac.
+#
+#   cc-install-remote <host> [host...]
+#   cc-install-remote --uninstall <host> [host...]
+#
+# It copies two files to ~/.claude/cc-notify/ on the remote and registers hooks
+# in the remote's ~/.claude/settings.json. All JSON editing happens HERE (node on
+# the Mac), so the remote needs nothing but bash + ssh — no node, jq or python.
+#
+# Re-run after a plugin update to refresh the copied scripts. Pair with
+# bin/cc-install-remote-agent, which keeps the local listener running.
+set -u
+
+here="$(cd "$(dirname "$0")" && pwd)"
+hooks="$here/../hooks"
+uninstall=""
+[ "${1:-}" = "--uninstall" ] && { uninstall=1; shift; }
+[ $# -gt 0 ] || { echo "usage: cc-install-remote [--uninstall] <host> [host...]" >&2; exit 2; }
+
+for f in cc-lib.sh cc-remote-emit.sh; do
+  [ -f "$hooks/$f" ] || { echo "error: missing $hooks/$f" >&2; exit 1; }
+done
+
+# Rewrite the remote settings.json: drop any cc-notify hook entries (so re-running
+# is idempotent and --uninstall is exact), then add the current set. Empty hook
+# arrays are pruned so an uninstall leaves the file as it found it.
+patch_settings() {
+  node -e '
+const rm = process.argv[1] === "remove";
+const CMD = "$HOME/.claude/cc-notify/cc-remote-emit.sh";
+// event → [kind, matcher]. Only events that carry information: a plain
+// PreToolUse/PostToolUse on every tool would be pure traffic for a status
+// (⏳) that UserPromptSubmit already set — AskUserQuestion is the exception,
+// because its menu fires no Notification and 🔀 is the only signal you get.
+const EV = {
+  SessionStart:     ["start",   null],
+  UserPromptSubmit: ["prompt",  null],
+  PreToolUse:       ["menu",    "AskUserQuestion"],
+  PostToolUse:      ["tool",    "AskUserQuestion"],
+  PreCompact:       ["compact", null],
+  Notification:     ["notification", null],
+  Stop:             ["stop",    null],
+  SessionEnd:       ["end",     null],
+};
+let d = "";
+process.stdin.on("data", c => d += c).on("end", () => {
+  let j; try { j = JSON.parse(d || "{}"); } catch (e) { j = {}; }
+  if (typeof j !== "object" || j === null || Array.isArray(j)) j = {};
+  const H = (j.hooks && typeof j.hooks === "object") ? j.hooks : (j.hooks = {});
+  for (const ev of Object.keys(H)) {
+    if (!Array.isArray(H[ev])) continue;
+    H[ev] = H[ev].filter(g => !(g && Array.isArray(g.hooks)
+      && g.hooks.some(h => h && typeof h.command === "string"
+                        && h.command.includes("cc-remote-emit.sh"))));
+    if (!H[ev].length) delete H[ev];
+  }
+  if (!rm) for (const [ev, [kind, matcher]] of Object.entries(EV)) {
+    const g = { hooks: [{ type: "command", command: `bash "${CMD}" ${kind}`, timeout: 5 }] };
+    if (matcher) g.matcher = matcher;
+    (H[ev] = H[ev] || []).push(g);
+  }
+  if (!Object.keys(H).length) delete j.hooks;
+  process.stdout.write(JSON.stringify(j, null, 2) + "\n");
+});' "$1"
+}
+
+for host in "$@"; do
+  echo "── $host"
+  if ! ssh -o BatchMode=yes -o ConnectTimeout=10 "$host" true 2>/dev/null; then
+    echo "   ✗ unreachable (needs key-based ssh)"; continue
+  fi
+
+  if [ -n "$uninstall" ]; then
+    ssh "$host" 'rm -rf "$HOME/.claude/cc-notify" "$HOME/.claude/cc-events.jsonl" "$HOME/.claude/cc-events.jsonl.1"' 2>/dev/null
+    action=remove
+  else
+    ssh "$host" 'mkdir -p "$HOME/.claude/cc-notify"' 2>/dev/null
+    scp -q "$hooks/cc-lib.sh" "$hooks/cc-remote-emit.sh" "$host:.claude/cc-notify/" || {
+      echo "   ✗ copy failed"; continue; }
+    ssh "$host" 'chmod +x "$HOME/.claude/cc-notify/cc-remote-emit.sh"' 2>/dev/null
+    action=add
+  fi
+
+  # settings.json: read → patch here → write back (with a backup).
+  new=$(ssh "$host" 'cat "$HOME/.claude/settings.json" 2>/dev/null' | patch_settings "$action")
+  [ -n "$new" ] || { echo "   ✗ could not build settings.json"; continue; }
+  printf '%s' "$new" | ssh "$host" 'mkdir -p "$HOME/.claude";
+      [ -f "$HOME/.claude/settings.json" ] && cp "$HOME/.claude/settings.json" "$HOME/.claude/settings.json.cc-bak";
+      cat > "$HOME/.claude/settings.json"' || { echo "   ✗ settings write failed"; continue; }
+
+  if [ -n "$uninstall" ]; then
+    echo "   ✓ removed (hooks unregistered, files deleted)"
+  else
+    ssh "$host" 'command -v tmux >/dev/null 2>&1' 2>/dev/null \
+      || echo "   ! no tmux on the remote — banners will work, click-to-focus can't route"
+    echo "   ✓ installed → ~/.claude/cc-notify/ (hooks registered; new sessions pick them up)"
+  fi
+done
+
+if [ -z "$uninstall" ]; then
+  cat <<'TXT'
+
+Next: keep the local listener running (once):
+  bin/cc-install-remote-agent
+and view the remote sessions in a hub so clicks have somewhere to land:
+  tmux-watch <host>:<path>
+TXT
+fi

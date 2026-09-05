@@ -47,7 +47,16 @@ cc_status_emoji() {
 cc_last_status_token() {
   local tp="$1"
   [ -n "$tp" ] && [ -f "$tp" ] || return 0
-  command -v node >/dev/null 2>&1 || return 0
+  # No node (remote boxes installed via the native installer): fall back to a grep.
+  # The token is the last message's trailing emoji, so in the JSONL it sits right
+  # before the closing quote of a "text" block — take the last such hit in the last
+  # few assistant lines. Only reached when node is ABSENT, so local behaviour
+  # (the exact parse below) is unchanged.
+  if ! command -v node >/dev/null 2>&1; then
+    grep '"type":"assistant"' "$tp" 2>/dev/null | tail -3 \
+      | grep -oE '(🚨|💯|✅|❌|🚫|🙋|👍|👎|🏃|🥱|ℹ️|💬)"' | tail -1 | tr -d '"'
+    return 0
+  fi
   node -e '
 const fs=require("fs");
 let lines; try{ lines=fs.readFileSync(process.argv[1],"utf8").split("\n"); }catch(e){ process.exit(0); }
@@ -67,20 +76,83 @@ for(let i=lines.length-1;i>=0;i--){
 
 # Read agentColor + session title from a transcript JSONL in one pass.
 # Title cascade: /rename customTitle → auto aiTitle → fallback (project).
-# Sets globals: CC_COLOR_EMOJI, CC_TITLE.
+# Sets globals: CC_COLOR_EMOJI, CC_COLOR_NAME, CC_TITLE.
 cc_session_meta() {
   local tp="$1" fallback="$2" meta ac ct at
   CC_COLOR_EMOJI=""
+  CC_COLOR_NAME=""
   CC_TITLE="$fallback"
   [ -n "$tp" ] && [ -f "$tp" ] || return 0
-  meta=$(grep -oE '"(agentColor|customTitle|aiTitle)":"[^"]*"' "$tp" 2>/dev/null)
-  ac=$(printf '%s\n' "$meta" | grep '"agentColor"'  | tail -1 | sed 's/.*:"//;s/"$//')
+  meta=$(grep -oE '"(customTitle|aiTitle)":"[^"]*"' "$tp" 2>/dev/null)
+  # Color is ANCHORED to the real record shape (a line saveAgentColor appended),
+  # not any inline "agentColor":"…" text — a transcript that merely QUOTES such a
+  # string (e.g. a session developing cc-notify itself) must not repaint, and
+  # since v1.7.17 the color is also persisted+applied (actuation), so a false
+  # positive would leak into <cwd>/.cc/settings.json and recolor future sessions.
+  ac=$(grep -o '^{"type":"agent-color","agentColor":"[^"]*"' "$tp" 2>/dev/null | tail -1 | sed 's/.*:"//;s/"$//')
   ct=$(printf '%s\n' "$meta" | grep '"customTitle"' | tail -1 | sed 's/.*:"//;s/"$//')
   at=$(printf '%s\n' "$meta" | grep '"aiTitle"'     | tail -1 | sed 's/.*:"//;s/"$//')
   CC_COLOR_EMOJI=$(cc_color_emoji "$ac")
+  CC_COLOR_NAME="$ac"
   if   [ -n "$ct" ]; then CC_TITLE="$ct"
   elif [ -n "$at" ]; then CC_TITLE="$at"
   fi
+}
+
+# Claude Code's own /color vocabulary. Anything we persist to disk or (worse)
+# type back into a TUI input box MUST pass this — never free text.
+cc_color_valid() {
+  case "$1" in red|orange|yellow|green|blue|purple|pink|cyan|default) return 0 ;; *) return 1 ;; esac
+}
+
+# Persist the session's color to <cwd>/.cc/settings.json (key "color") so future
+# sessions in this project adopt it on SessionStart (see cc-color-apply.sh).
+# Merge-write: other keys survive, no write when unchanged. With several live
+# sessions in one cwd the last active one wins — that's the intended semantics
+# ("the project's color is whatever I last set here").
+cc_color_persist() {
+  local cwd="$1" color="$2"
+  [ -n "$cwd" ] && [ -d "$cwd" ] && cc_color_valid "$color" || return 0
+  command -v node >/dev/null 2>&1 || return 0
+  mkdir -p "$cwd/.cc" 2>/dev/null || return 0
+  CC_COLOR="$color" node -e '
+const fs=require("fs"), f=process.argv[1]+"/.cc/settings.json";
+let d={}; try{ d=JSON.parse(fs.readFileSync(f,"utf8")); }catch(e){}
+if(typeof d!=="object"||d===null||Array.isArray(d)) d={};
+if(d.color===process.env.CC_COLOR) process.exit(0);
+d.color=process.env.CC_COLOR;
+try{ fs.writeFileSync(f, JSON.stringify(d,null,2)+"\n"); }catch(e){}
+' "$cwd" 2>/dev/null
+}
+
+# The configured color from <cwd>/.cc/settings.json → stdout ("" if none/invalid).
+cc_color_settings() {
+  local cwd="$1" c
+  [ -n "$cwd" ] && [ -f "$cwd/.cc/settings.json" ] || return 0
+  command -v node >/dev/null 2>&1 || return 0
+  c=$(node -e 'try{const d=JSON.parse(require("fs").readFileSync(process.argv[1],"utf8"));if(typeof d.color==="string")process.stdout.write(d.color)}catch(e){}' "$cwd/.cc/settings.json" 2>/dev/null)
+  cc_color_valid "$c" && printf '%s' "$c"
+}
+
+# Walk a tty's process tree up to a GUI terminal/editor; on a hit sets CC_TERM
+# (when it was still "tmux"), CC_GUI_PID and CC_CLIENT_TTY, and returns 0.
+# Top-level because BOTH cc_detect_terminal (walks from the caller) and
+# cc_pane_route (walks from an arbitrary tmux pane's client) need it.
+cc_walk_tty() {  # walk a tty's process tree up to a GUI terminal; set CC_* on hit
+  local cand="$1" pid hops cmd
+  pid=$(ps -t "${cand#/dev/}" -o pid= 2>/dev/null | head -1 | tr -d ' '); hops=0
+  while [ -n "$pid" ] && [ "$pid" != "1" ] && [ "$hops" -lt 20 ]; do
+    cmd=$(ps -o comm= -p "$pid" 2>/dev/null)
+    case "$cmd" in
+      */Terminal|Terminal)              [ "$CC_TERM" = tmux ] && CC_TERM=Apple_Terminal; CC_GUI_PID="$pid"; CC_CLIENT_TTY="$cand"; return 0 ;;
+      */iTerm2|iTerm2|*/iTerm|iTerm)    [ "$CC_TERM" = tmux ] && CC_TERM=iTerm.app;      CC_GUI_PID="$pid"; CC_CLIENT_TTY="$cand"; return 0 ;;
+      */Ghostty|Ghostty|*/ghostty|ghostty) [ "$CC_TERM" = tmux ] && CC_TERM=ghostty;     CC_GUI_PID="$pid"; CC_CLIENT_TTY="$cand"; return 0 ;;
+      */Cursor|Cursor)                  [ "$CC_TERM" = tmux ] && CC_TERM=vscode; CC_EDITOR_APP=Cursor; CC_GUI_PID="$pid"; CC_CLIENT_TTY="$cand"; return 0 ;;
+      */Code\ Helper*|*/Electron|*/Code|Code) [ "$CC_TERM" = tmux ] && CC_TERM=vscode; CC_EDITOR_APP=Code; CC_GUI_PID="$pid"; CC_CLIENT_TTY="$cand"; return 0 ;;
+    esac
+    pid=$(ps -o ppid= -p "$pid" 2>/dev/null | tr -d ' '); hops=$((hops + 1))
+  done
+  return 1
 }
 
 # Detect the GUI terminal/editor hosting this hook + collect candidate shell pids
@@ -99,22 +171,6 @@ cc_detect_terminal() {
     CC_CLIENT_TTY=$(tmux display-message -t "$TMUX_PANE" -p '#{client_tty}' 2>/dev/null)
   fi
 
-  _cc_walk_tty() {  # walk a tty's process tree up to a GUI terminal; set CC_* on hit
-    local cand="$1" pid hops cmd
-    pid=$(ps -t "${cand#/dev/}" -o pid= 2>/dev/null | head -1 | tr -d ' '); hops=0
-    while [ -n "$pid" ] && [ "$pid" != "1" ] && [ "$hops" -lt 20 ]; do
-      cmd=$(ps -o comm= -p "$pid" 2>/dev/null)
-      case "$cmd" in
-        */Terminal|Terminal)              [ "$CC_TERM" = tmux ] && CC_TERM=Apple_Terminal; CC_GUI_PID="$pid"; CC_CLIENT_TTY="$cand"; return 0 ;;
-        */iTerm2|iTerm2|*/iTerm|iTerm)    [ "$CC_TERM" = tmux ] && CC_TERM=iTerm.app;      CC_GUI_PID="$pid"; CC_CLIENT_TTY="$cand"; return 0 ;;
-        */Ghostty|Ghostty|*/ghostty|ghostty) [ "$CC_TERM" = tmux ] && CC_TERM=ghostty;     CC_GUI_PID="$pid"; CC_CLIENT_TTY="$cand"; return 0 ;;
-        */Cursor|Cursor)                  [ "$CC_TERM" = tmux ] && CC_TERM=vscode; CC_EDITOR_APP=Cursor; CC_GUI_PID="$pid"; CC_CLIENT_TTY="$cand"; return 0 ;;
-        */Code\ Helper*|*/Electron|*/Code|Code) [ "$CC_TERM" = tmux ] && CC_TERM=vscode; CC_EDITOR_APP=Code; CC_GUI_PID="$pid"; CC_CLIENT_TTY="$cand"; return 0 ;;
-      esac
-      pid=$(ps -o ppid= -p "$pid" 2>/dev/null | tr -d ' '); hops=$((hops + 1))
-    done
-    return 1
-  }
 
   # ancestor PID chain of the caller (one of these == the editor's shell pid)
   CC_SHELL_PIDS=""; local _p=$$ _h=0
@@ -138,11 +194,11 @@ cc_detect_terminal() {
     _mp=$(ps -o ppid= -p "$_mp" 2>/dev/null | tr -d ' '); _mh=$((_mh + 1))
   done
 
-  [ -z "$CC_GUI_PID" ] && [ -n "$CC_CLIENT_TTY" ] && _cc_walk_tty "$CC_CLIENT_TTY"
+  [ -z "$CC_GUI_PID" ] && [ -n "$CC_CLIENT_TTY" ] && cc_walk_tty "$CC_CLIENT_TTY"
   if [ -z "$CC_GUI_PID" ] && [ -n "$TMUX" ]; then
     while IFS= read -r cand; do
       [ -z "$cand" ] && continue
-      _cc_walk_tty "$cand" && break
+      cc_walk_tty "$cand" && break
     done < <(tmux list-clients -F '#{client_focused}|#{client_activity}|#{client_tty}' 2>/dev/null | sort -t'|' -k1,1nr -k2,2nr | cut -d'|' -f3)
   fi
 
@@ -216,4 +272,172 @@ cc_trigger_sweep() {
   local sweep
   sweep="$(cd "$(dirname "${BASH_SOURCE[0]}")/../bin" 2>/dev/null && pwd)/cc-sweep"
   [ -x "$sweep" ] && ( "$sweep" </dev/null >/dev/null 2>&1 & )
+}
+
+# ---------------------------------------------------------------------------
+# Presentation: facts → what the banner and the tab say.
+# ---------------------------------------------------------------------------
+
+# The SINGLE source of truth for the banner/tab vocabulary. Called by the local
+# hook (cc-notify.sh) and by the remote bridge (bin/cc-remote-bridge), so a
+# session on another machine presents identically to a local one.
+# Args: event_kind notif_type message token color_emoji session_title cwd_base branch
+# Sets: CC_STATUS CC_SUBTITLE CC_BODY CC_SOUND CC_BANNER_TITLE CC_TAB_ONLY
+cc_present() {
+  local kind="$1" ntype="$2" msg="$3" token="$4" color="$5" title="$6" base="$7" branch="$8"
+  CC_TAB_ONLY=""
+  if [ "$kind" = "notification" ]; then
+    CC_SOUND="Glass"
+    # Distinguish permission requests (🔐) from questions / idle input (❓), via
+    # notification_type with a message-text fallback. Unknown types → 🔔.
+    # The idle one (CC's ~60s "waiting for your input") is LOW-signal and noisy →
+    # tab status only, NO banner. Permission + generic still banner.
+    case "$ntype $msg" in
+      *permission*|*Permission*)           CC_STATUS=$(cc_status_emoji permission);  CC_SUBTITLE="Needs permission" ;;
+      *idle*|*waiting*|*input*|*question*) CC_STATUS=$(cc_status_emoji question);    CC_SUBTITLE="Awaiting your input"; CC_TAB_ONLY=1 ;;
+      *)                                   CC_STATUS=$(cc_status_emoji needs_input); CC_SUBTITLE="Needs your attention" ;;
+    esac
+    CC_BODY="${msg:-Claude needs you}"
+  else
+    CC_STATUS="$token"
+    [ -z "$CC_STATUS" ] && CC_STATUS=$(cc_status_emoji idle)
+    CC_SOUND="Hero"
+    case "$CC_STATUS" in
+      🚨) CC_SUBTITLE="⚠️ Accident / disaster" ;;
+      💯) CC_SUBTITLE="All tasks complete"; CC_STATUS=$(cc_status_emoji complete) ;;  # 💯 → display 💯✅
+      ✅) CC_SUBTITLE="Task complete" ;;
+      ❌) CC_SUBTITLE="Task failed" ;;
+      🚫) CC_SUBTITLE="Blocked" ;;
+      🙋) CC_SUBTITLE="Waiting for instructions" ;;
+      👍) CC_SUBTITLE="Good news" ;;
+      👎) CC_SUBTITLE="Bad news" ;;
+      🏃) CC_SUBTITLE="Work to be done" ;;
+      🥱) CC_SUBTITLE="Still waiting — nothing new"; CC_TAB_ONLY=1 ;;  # loop/poll tick → tab only
+      ℹ️) CC_SUBTITLE="FYI" ;;
+      *)  CC_SUBTITLE="Turn complete" ;;
+    esac
+    CC_BODY="$base"
+    [ -n "$branch" ] && CC_BODY="$base · $branch"
+  fi
+  CC_BANNER_TITLE=$(cc_tab_name "$CC_STATUS" "$color" "${title:-$base}")
+}
+
+# ---------------------------------------------------------------------------
+# tmux-watch hub panes: the one place a session (local OR remote) is visible
+# on this Mac. Pane identity is tmux-watch's @tw-src = "<host>\t<session>"
+# (host empty for local) — a stable key that survives pane renumbering and
+# inner programs rewriting the title.
+# ---------------------------------------------------------------------------
+
+# Local pane id displaying <host>:<tmux session> → stdout ("" if not shown here).
+# host="" means a LOCAL tmux session (tmux-watch stores an empty host field).
+cc_hub_pane() {
+  local host="$1" sess="$2"
+  [ -n "$sess" ] || return 0
+  command -v tmux >/dev/null 2>&1 || return 0
+  tmux list-panes -a -F '#{pane_id}	#{@tw-src}' 2>/dev/null \
+    | awk -F'\t' -v h="$host" -v s="$sess" '$2==h && $3==s {print $1; exit}'
+}
+
+# Show a session's live status on its hub pane's border, so the hub doubles as a
+# dashboard of every session. Written to a pane user-option (NOT the pane title):
+# the pane runs `tmux attach`/`ssh`, and an inner program can rewrite the title at
+# any moment — it cannot touch @cc-status. Idempotent; safe to call on every event.
+cc_pane_status() {
+  local pane="$1" name="$2"
+  [ -n "$pane" ] && [ -n "$name" ] || return 0
+  command -v tmux >/dev/null 2>&1 || return 0
+  [ "$(tmux show -p -t "$pane" -v @cc-status 2>/dev/null)" = "$name" ] && return 0
+  tmux set -p -t "$pane" @cc-status "$name" 2>/dev/null
+  tmux set -w -t "$pane" pane-border-format '#{?@cc-status,#{@cc-status},#{pane_title}}' 2>/dev/null
+  tmux set -w -t "$pane" pane-border-status top 2>/dev/null
+}
+
+# Route fields for a session that is displayed in the local tmux pane $1 — i.e.
+# "which GUI window + tmux coordinates do I focus to look at that pane". This is
+# cc_detect_terminal's job done from a PANE instead of from the calling process,
+# which is what lets a click on a remote session's banner land exactly where a
+# local one does. Sets the same CC_* globals cc-focus.sh consumes.
+cc_pane_route() {
+  local pane="$1" sess
+  CC_TERM="tmux"; CC_EDITOR_APP=""; CC_GUI_PID=""; CC_CLIENT_TTY=""
+  CC_TMUX_TARGET=""; CC_SHELL_PIDS=""
+  [ -n "$pane" ] || return 1
+  command -v tmux >/dev/null 2>&1 || return 1
+  CC_TMUX_TARGET=$(tmux display-message -p -t "$pane" '#S:#I.#P' 2>/dev/null) || return 1
+  [ -n "$CC_TMUX_TARGET" ] || return 1
+  sess="${CC_TMUX_TARGET%%:*}"
+  # Clients attached to that pane's session, most useful first (focused, then
+  # most recently active) — the same ordering cc_detect_terminal uses.
+  while IFS= read -r cand; do
+    [ -z "$cand" ] && continue
+    cc_walk_tty "$cand" && break
+  done < <(tmux list-clients -F '#{client_focused}|#{client_activity}|#{client_session}|#{client_tty}' 2>/dev/null \
+             | awk -F'|' -v s="$sess" '$3==s' | sort -t'|' -k1,1nr -k2,2nr | cut -d'|' -f4)
+  # The editor extension matches its integrated terminal by shell pid — every pid
+  # on the client tty (the tmux client's shell is a sibling, not an ancestor).
+  if [ -n "$CC_CLIENT_TTY" ]; then
+    local _tp
+    for _tp in $(ps -t "${CC_CLIENT_TTY#/dev/}" -o pid= 2>/dev/null); do
+      CC_SHELL_PIDS="${CC_SHELL_PIDS:+$CC_SHELL_PIDS,}$_tp"
+    done
+  fi
+  [ -n "$CC_CLIENT_TTY" ]
+}
+
+# Exact Aerospace window id for a tty. Terminal.app and Ghostty run MANY windows
+# under ONE pid, so the pid→first-window lookup cc-focus.sh falls back to is a coin flip
+# (LESSONS #10) — locally that is covered by the window id captured at
+# SessionStart, which a session on another machine has no equivalent of. Only
+# AppleScript knows which window holds a tty, and only Aerospace can focus a
+# window across workspaces: bridge the two on the window TITLE, which both report
+# identically. Args: tty pid term. Echoes a window id, or nothing.
+cc_wid_for_tty() {
+  local tty="$1" pid="$2" term="$3" name="" wid=""
+  command -v aerospace >/dev/null 2>&1 || return 1
+  if [ "$term" = "Apple_Terminal" ] && [ -n "$tty" ]; then
+    name=$(osascript -e "tell application \"Terminal\"
+  repeat with w in windows
+    repeat with t in tabs of w
+      try
+        if tty of t is \"$tty\" then return name of w
+      end try
+    end repeat
+  end repeat
+  return \"\"
+end tell" 2>/dev/null)
+    [ -n "$name" ] && wid=$(aerospace list-windows --monitor all \
+      --format '%{window-id}|%{window-title}' 2>/dev/null \
+      | awk -F'|' -v n="$name" '{ id=$1; sub(/^[^|]*\|/,""); if ($0==n) { print id; exit } }')
+  fi
+  # Ghostty: many windows under one pid too, and no tty in its AppleScript
+  # dictionary — but tabs/terminals have a NAME, which is the tmux title
+  # (set-titles-string, "<session> · <host>" in the repo .tmux.conf). Expand
+  # that format for the client on this tty, ask Ghostty to focus the terminal
+  # carrying it (this also selects a background tab, so the window title
+  # becomes it), then take the window id from aerospace by that title so the
+  # caller can switch workspace. With no match fall through to the pid lookup.
+  if [ "$term" = "ghostty" ] && [ -n "$tty" ] && [ -z "$wid" ]; then
+    name=$(tmux display-message -c "$tty" -p '#{T:set-titles-string}' 2>/dev/null)
+    if [ -n "$name" ]; then
+      osascript >/dev/null 2>&1 <<OSA
+tell application "Ghostty"
+  repeat with w in windows
+    repeat with t in tabs of w
+      if name of t is "$name" then
+        focus (focused terminal of t)
+        return
+      end if
+    end repeat
+  end repeat
+end tell
+OSA
+      wid=$(aerospace list-windows --monitor all --format '%{window-id}|%{window-title}' 2>/dev/null \
+        | awk -F'|' -v n="$name" '{ id=$1; sub(/^[^|]*\|/,""); if ($0==n) { print id; exit } }')
+    fi
+  fi
+  # Anything else (editors, one-window apps): the pid lookup is unambiguous enough.
+  [ -z "$wid" ] && [ -n "$pid" ] && wid=$(aerospace list-windows --monitor all --pid "$pid" \
+    --format '%{window-id}' 2>/dev/null | head -1)
+  [ -n "$wid" ] && printf '%s' "$wid"
 }
