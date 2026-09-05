@@ -1,0 +1,233 @@
+#!/usr/bin/env bash
+# cc-remote-bridge — bring Claude Code sessions running on REMOTE machines into
+# this Mac's notification + status world.
+#
+#   cc-remote-bridge            supervise: one streamer per discovered host
+#   cc-remote-bridge <host>     stream one host in the foreground
+#   cc-remote-bridge --hosts    print the hosts that would be bridged
+#   cc-remote-bridge --stop     stop the supervisor and all streamers
+#   cc-remote-bridge --test <host>   handle event lines from stdin (no ssh)
+#
+# How it works: the remote's hooks append one JSON line per event to
+# ~/.claude/cc-events.jsonl (hooks/cc-remote-emit.sh); we hold an ssh connection
+# open running `tail -F` on it and turn each line into exactly what a local
+# session produces — a banner (cc-notify-bg.sh), a route file the click handler
+# reads, and a live status on the tmux-watch hub pane that displays the session.
+#
+# The ssh alias is stamped on every event HERE, which is the whole reason this
+# side owns identity: the remote only knows its own hostname, while the local
+# pane is keyed by the alias you ssh with (tmux-watch's @tw-src).
+#
+# Off switch: ~/.claude/notify.disable_remote
+set -u
+
+here="$(cd "$(dirname "$0")" && pwd)"
+hooks="$here/../hooks"
+# shellcheck disable=SC1091
+. "$hooks/cc-lib.sh"
+
+state=/tmp/cc-notify
+log="$state/remote-bridge.log"
+alerter_bin="$(command -v alerter 2>/dev/null || echo /opt/homebrew/bin/alerter)"
+REPLAY="${CC_REMOTE_REPLAY:-60}"      # seconds of backlog to replay on (re)connect
+RETRY="${CC_REMOTE_RETRY:-10}"        # seconds between reconnect attempts
+SCAN="${CC_REMOTE_SCAN:-30}"          # seconds between host rediscovery
+mkdir -p "$state" 2>/dev/null
+
+_log() { printf '[%s] %s\n' "$(date -u +%FT%TZ)" "$*" >>"$log" 2>/dev/null; }
+_slug() { printf '%s' "$1" | tr -c 'A-Za-z0-9_.-' '_'; }
+_off()  { [ -f "$HOME/.claude/notify.disable_remote" ]; }
+
+# Kill a process and everything under it, BY PID, depth-first. The streamer's ssh
+# lives in a pipeline subshell, so signalling the streamer alone orphans a live
+# ssh; and a `pkill -f` pattern here would match anything that merely mentions
+# this script (an editor, a grep, the shell that ran it).
+_kill_tree() {
+  local p="$1" c
+  [ -n "$p" ] || return 0
+  for c in $(pgrep -P "$p" 2>/dev/null); do _kill_tree "$c"; done
+  kill "$p" 2>/dev/null
+}
+
+# ---------------------------------------------------------------------------
+# Host discovery. A host is worth bridging if you can SEE it: any tmux-watch
+# pane tiling a remote session (@tw-src's host field). Plus anything you pin in
+# ~/.claude/notify.remote-hosts. Zero config in the common case.
+# ---------------------------------------------------------------------------
+_hosts() {
+  {
+    tmux list-panes -a -F '#{@tw-src}' 2>/dev/null | awk -F'\t' 'NF>1 && $1!="" {print $1}'
+    [ -f "$HOME/.claude/notify.remote-hosts" ] \
+      && sed 's/#.*//; s/[[:space:]]//g' "$HOME/.claude/notify.remote-hosts"
+  } 2>/dev/null | grep -v '^$' | sort -u
+}
+
+# ---------------------------------------------------------------------------
+# One event line → banner + route + hub status. Args: host, json line.
+# The line is UNTRUSTED input from another machine: it is only ever parsed as
+# JSON into shell variables (single-quoted by node, never eval'd as code) and
+# used as text. Nothing here executes anything the remote sent.
+# ---------------------------------------------------------------------------
+_handle() {
+  local host="$1" line="$2" seen_f pane name title subtitle body sound st route
+  # Fresh per line: the whole stream runs in ONE shell, so without these locals a
+  # line that fails to parse would be handled with the previous line's values.
+  local E_ts E_sid E_event E_token E_color E_title E_cwd E_base E_branch E_tmux E_ntype E_msg
+  eval "$(printf '%s' "$line" | node -e '
+let d="";process.stdin.on("data",c=>d+=c).on("end",()=>{
+  let j; try{ j=JSON.parse(d); }catch(e){ process.exit(1); }
+  if(typeof j!=="object"||!j||!j.sid) process.exit(1);
+  const q=s=>"'"'"'"+String(s==null?"":s).replace(/\x00/g,"").replace(/'"'"'/g,"'"'"'\\'"'"''"'"'")+"'"'"'";
+  const keys=["ts","sid","event","token","color","title","cwd","base","branch","tmux","ntype","msg"];
+  process.stdout.write(keys.map(k=>"E_"+k+"="+q(j[k])).join("\n"));
+});' 2>/dev/null)" || return 0
+  [ -n "${E_sid:-}" ] || return 0
+
+  # Duplicate guard. On reconnect we replay the last ${REPLAY}s so a blip does not
+  # swallow a "done" ping — this is what stops that replay from re-banner-ing (or
+  # worse, re-firing a 🚨 auto-focus) for events already handled.
+  seen_f="$state/bridge-$(_slug "$host").ts"
+  awk -v new="${E_ts:-0}" -v f="$seen_f" 'BEGIN{ getline old < f; exit !(new+0 > old+0) }' \
+    || return 0
+  printf '%s' "${E_ts:-0}" >"$seen_f" 2>/dev/null
+
+  # Where is this session visible on THIS Mac? (tmux-watch hub pane, if tiled.)
+  pane=$(cc_hub_pane "$host" "${E_tmux%%:*}")
+
+  case "${E_event:-}" in
+    notification|stop)
+      cc_present "${E_event}" "${E_ntype:-}" "${E_msg:-}" "${E_token:-}" \
+        "${E_color:-}" "${E_title:-}" "${E_base:-}" "${E_branch:-}"
+      st="$CC_STATUS"; subtitle="$CC_SUBTITLE"; body="$CC_BODY"; sound="$CC_SOUND"
+      name="$CC_BANNER_TITLE"
+      ;;
+    start)   st=$(cc_status_emoji startup) ;;
+    prompt)  st=$(cc_status_emoji running) ;;
+    tool)    st=$(cc_status_emoji running) ;;
+    menu)    st=$(cc_status_emoji options) ;;
+    compact) st=$(cc_status_emoji compacting) ;;
+    end)     st="" ;;
+    *)       return 0 ;;
+  esac
+  [ -n "${name:-}" ] || name=$(cc_tab_name "$st" "${E_color:-}" "${E_title:-${E_base:-}}")
+
+  # Status board: the hub pane border is a remote session's only tab equivalent.
+  if [ -n "$pane" ]; then
+    if [ "${E_event}" = "end" ]; then tmux set -p -t "$pane" -u @cc-status 2>/dev/null
+    else cc_pane_status "$pane" "$name"
+    fi
+  fi
+
+  # Route file for the click handler. tmux_target is the LOCAL hub pane, so the
+  # banner's dismiss-on-typing watcher (which reads that pane) works for remote
+  # sessions too — you are literally typing into that pane. remote_host/remote_tmux
+  # let cc-focus.sh re-resolve the pane at CLICK time (panes come and go).
+  cc_pane_route "$pane" 2>/dev/null || true
+  route="$state/${E_sid}.route"
+  {
+    printf 'term=%q\n'        "$CC_TERM"
+    printf 'tmux_target=%q\n' "$CC_TMUX_TARGET"
+    printf 'client_tty=%q\n'  "$CC_CLIENT_TTY"
+    printf 'cwd=%q\n'         "${E_cwd:-}"
+    printf 'tmux_socket=%q\n' "${TMUX:-}"
+    printf 'gui_pid=%q\n'     "$CC_GUI_PID"
+    printf 'target_wid=%q\n'  ""
+    printf 'editor_app=%q\n'  "$CC_EDITOR_APP"
+    printf 'shell_pids=%q\n'  "$CC_SHELL_PIDS"
+    printf 'remote_host=%q\n' "$host"
+    printf 'remote_tmux=%q\n' "${E_tmux:-}"
+  } >"$route" 2>/dev/null
+
+  # You replied / the session ended → clear its banner, and reap the ~30MB worker
+  # so it can't become an orphan (LESSONS #19). Mirrors cc-capture-window.sh.
+  case "${E_event}" in
+    prompt|end)
+      ( "$alerter_bin" --remove "cc-${E_sid}" >/dev/null 2>&1; sleep 0.3
+        pkill -f "alerter.*cc-${E_sid}" 2>/dev/null ) &
+      return 0 ;;
+  esac
+
+  # 🚨 emergency: jump to the session without waiting for a click (the banner
+  # still fires below as the visible record).
+  [ "$st" = "🚨" ] && ( bash "$hooks/cc-focus.sh" "${E_sid}" >>"$log" 2>&1 & )
+
+  case "${E_event}" in
+    notification|stop)
+      [ -n "$CC_TAB_ONLY" ] && return 0          # idle prompt / 🥱 → status only
+      pkill -f "alerter.*cc-${E_sid} " 2>/dev/null   # one live worker per session
+      _log "banner ${E_sid}: $name | $subtitle"
+      ( bash "$hooks/cc-notify-bg.sh" "${E_sid}" "$name" "$subtitle" "$body" "$sound" \
+          </dev/null >>"$log" 2>&1 & )
+      ;;
+  esac
+}
+
+# ---------------------------------------------------------------------------
+# Stream one host until told to stop. `tail -F` follows the path, so the remote
+# rotating its event file is handled for free.
+# ---------------------------------------------------------------------------
+_stream() {
+  local host="$1" line
+  trap 'for c in $(pgrep -P $$ 2>/dev/null); do _kill_tree "$c"; done; exit 0' TERM INT
+  _log "stream $host: start"
+  while ! _off; do
+    ssh -o BatchMode=yes -o ConnectTimeout=10 \
+        -o ServerAliveInterval=20 -o ServerAliveCountMax=3 \
+        "$host" "f=\$HOME/.claude/cc-events.jsonl; mkdir -p \$HOME/.claude; : >>\"\$f\";
+                 awk -v t=\$(( \$(date +%s) - $REPLAY )) -F'\"ts\":' 'NF>1{split(\$2,a,\",\"); if (a[1]+0>=t) print}' \"\$f\";
+                 exec tail -n 0 -F \"\$f\" 2>/dev/null" 2>>"$log" \
+    | while IFS= read -r line; do
+        [ -n "$line" ] && _handle "$host" "$line"
+      done
+    _off && break
+    _log "stream $host: disconnected, retrying in ${RETRY}s"
+    sleep "$RETRY"
+  done
+  _log "stream $host: stop"
+}
+
+# ---------------------------------------------------------------------------
+# Supervisor: keep exactly one streamer per discovered host.
+# ---------------------------------------------------------------------------
+_supervise() {
+  local host pidf pid
+  trap 'for c in $(pgrep -P $$ 2>/dev/null); do _kill_tree "$c"; done; rm -f "$state/bridge-supervisor.pid"; exit 0' TERM INT
+  printf '%s' "$$" >"$state/bridge-supervisor.pid"
+  _log "supervisor start (pid $$)"
+  while :; do
+    if _off; then
+      for c in $(pgrep -P $$ 2>/dev/null); do _kill_tree "$c"; done
+      sleep "$SCAN"; continue
+    fi
+    while IFS= read -r host; do
+      [ -n "$host" ] || continue
+      pidf="$state/bridge-$(_slug "$host").pid"
+      pid=$(cat "$pidf" 2>/dev/null)
+      if [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null; then continue; fi
+      "$0" "$host" >/dev/null 2>&1 &
+      printf '%s' "$!" >"$pidf"
+      _log "supervisor: spawned streamer for $host (pid $!)"
+    done <<<"$(_hosts)"
+    sleep "$SCAN"
+  done
+}
+
+case "${1:-}" in
+  --hosts) _hosts ;;
+  --test)
+    # Feed event lines in by hand, exactly as a stream would deliver them.
+    while IFS= read -r line; do [ -n "$line" ] && _handle "${2:-testhost}" "$line"; done ;;
+  --stop)
+    # By PID from the pidfiles, never by pattern: a -f pattern matches any command
+    # line that merely MENTIONS this script (an editor, a grep, this very shell).
+    for f in "$state"/bridge-*.pid; do
+      [ -f "$f" ] || continue
+      pid=$(cat "$f" 2>/dev/null)
+      _kill_tree "$pid"
+      rm -f "$f"
+    done
+    echo "stopped" ;;
+  "")  _supervise ;;
+  -*)  echo "usage: cc-remote-bridge [<host> | --hosts | --stop]" >&2; exit 2 ;;
+  *)   _stream "$1" ;;
+esac

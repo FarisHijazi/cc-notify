@@ -20,10 +20,11 @@ Option 3 is the easiest user-facing fix. Option 1 is the cleanest architecturall
 
 ## Done
 
+- ~~SSH-remote sessions can't deliver Mac banners back~~ — **SOLVED in v1.8.0**: `hooks/cc-remote-emit.sh` on the remote + `bin/cc-remote-bridge` on the Mac, with click-routing through tmux-watch's `@tw-src` hub panes. See README "Remote sessions over SSH" and LESSONS #22.
 - ~~VS Code / Cursor: individual integrated terminal panes can't be focused~~ — **SOLVED in v1.7.0** via the `editor-extension/` (`terminal.show()` matched by shell pid; install with `bin/cc-install-editor-extension`). Remaining edge: two terminals whose shells share a pid set can't happen (pids are unique), but a session with *no* matching live terminal falls back to focusing the terminal panel.
 
 ## Other known limitations
 
 - VS Code / Cursor: needs the companion extension installed + window reloaded for pane-level focus; otherwise falls back to window-level focus.
-- SSH-remote sessions can't deliver Mac banners back (Tier 1: just bell + remote log).
+- Remote sessions need remote tmux for click-routing (banners still fire without it); a remote session not tiled into a tmux-watch hub materializes a new Terminal window on click rather than focusing an existing one.
 - First click triggers macOS Automation permission prompts; user must allow once.

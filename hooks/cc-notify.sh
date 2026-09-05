@@ -37,6 +37,11 @@ cc_session_meta "$transcript_path" "$(basename "${cwd:-$PWD}")"
 emoji="$CC_COLOR_EMOJI"
 session_title="$CC_TITLE"
 
+# Keep the project's configured color (<cwd>/.cc/settings.json) tracking the
+# session's /color — new sessions in this cwd adopt it at SessionStart (see
+# cc-capture-window.sh + cc-color-apply.sh). Detached, write-only-if-changed.
+[ -n "$CC_COLOR_NAME" ] && ( cc_color_persist "${cwd:-$PWD}" "$CC_COLOR_NAME" </dev/null >/dev/null 2>&1 & )
+
 # SSH branch: hook is running on a remote box. Bell + log, exit.
 if [ -n "$SSH_CONNECTION" ]; then
   printf '\a' >/dev/tty 2>/dev/null
@@ -71,43 +76,20 @@ git_branch=$(git -C "${cwd:-$PWD}" symbolic-ref --short HEAD 2>/dev/null)
 # and the terminal tab (no wasted "Claude Code" — the orange Claude content-image
 # already brands it). Status: notification → 🔔; stop → ✅/❌/⭕ from the trailing
 # token in Claude's last message (per global CLAUDE.md), else 👀 "your turn".
-if [ "$event_kind" = "notification" ]; then
-  sound="Glass"
-  # Distinguish permission requests (🔐) from questions / idle input (❓), via
-  # notification_type with a message-text fallback. Unknown types → 🔔. The exact
-  # type strings are logged to notiftypes.log so the mapping can be refined.
-  printf '%s\t%s\n' "${notif_type:-?}" "$message" >> "$state_dir/notiftypes.log" 2>/dev/null
-  # idle/input notifications (CC's ~60s "waiting for your input") are LOW-signal
-  # and noisy → update the tab status only, NO banner (notif_tab_only=1). Permission
-  # prompts and the generic fallback still banner.
-  case "$notif_type $message" in
-    *permission*|*Permission*) status_emoji=$(cc_status_emoji permission); subtitle="Needs permission" ;;
-    *idle*|*waiting*|*input*|*question*) status_emoji=$(cc_status_emoji question); subtitle="Awaiting your input"; notif_tab_only=1 ;;
-    *) status_emoji=$(cc_status_emoji needs_input); subtitle="Needs your attention" ;;
-  esac
-  body="${message:-Claude needs you}"
-else
-  status_emoji=$(cc_last_status_token "$transcript_path")
-  [ -z "$status_emoji" ] && status_emoji=$(cc_status_emoji idle)
-  sound="Hero"
-  case "$status_emoji" in
-    🚨) subtitle="⚠️ Accident / disaster" ;;
-    💯) subtitle="All tasks complete"; status_emoji=$(cc_status_emoji complete) ;;  # 💯 → display 💯✅
-    ✅) subtitle="Task complete" ;;
-    ❌) subtitle="Task failed" ;;
-    🚫) subtitle="Blocked" ;;
-    🙋) subtitle="Waiting for instructions" ;;
-    👍) subtitle="Good news" ;;
-    👎) subtitle="Bad news" ;;
-    🏃) subtitle="Work to be done" ;;
-    🥱) subtitle="Still waiting — nothing new"; notif_tab_only=1 ;;  # loop/poll/schedule tick → tab only, NO banner
-    ℹ️) subtitle="FYI" ;;
-    *)  subtitle="Turn complete" ;;
-  esac
-  body="$cwd_basename"
-  [ -n "$git_branch" ] && body="$cwd_basename · $git_branch"
-fi
-title=$(cc_tab_name "$status_emoji" "$emoji" "${session_title:-$cwd_basename}")
+# Raw notification types are logged so the mapping can be refined (only
+# idle_prompt / permission_prompt have been seen in practice).
+[ "$event_kind" = "notification" ] \
+  && printf '%s\t%s\n' "${notif_type:-?}" "$message" >>"$state_dir/notiftypes.log" 2>/dev/null
+
+# Facts → what the banner/tab say. cc_present is the single source of truth for
+# that vocabulary (status emoji, subtitle, body, sound, tab-only-ness) and is
+# shared with bin/cc-remote-bridge, so a session on another machine presents
+# exactly like a local one.
+cc_present "$event_kind" "$notif_type" "$message" \
+  "$(cc_last_status_token "$transcript_path")" "$emoji" "$session_title" \
+  "$cwd_basename" "$git_branch"
+status_emoji="$CC_STATUS"; subtitle="$CC_SUBTITLE"; body="$CC_BODY"
+sound="$CC_SOUND"; title="$CC_BANNER_TITLE"; notif_tab_only="$CC_TAB_ONLY"
 
 # Terminal-tab status — write it ALWAYS, decoupled from the banner gating below.
 # This MUST run even when the Stop banner is suppressed/kill-switched, otherwise
@@ -126,6 +108,12 @@ if [ "$term" = "vscode" ] && [ -n "$shell_pids_all" ]; then
 else
   ( cc_set_status "${session_id:-default}" "$status_emoji" </dev/null >/dev/null 2>&1 & )
 fi
+
+# Mirror the status onto this session's tmux-watch hub pane, if the session is
+# tiled into one — that turns the hub into a live dashboard of every session
+# (and is the ONLY status surface a remote session has). No-op without a hub.
+( pane=$(cc_hub_pane "" "${tmux_target%%:*}"); cc_pane_status "$pane" "$title" ) \
+  </dev/null >/dev/null 2>&1 &
 
 # This session's status just changed (Stop = turn done, or a Notification) — repaint
 # every window's tabs so a backgrounded session's tab catches up. Throttled + typing-

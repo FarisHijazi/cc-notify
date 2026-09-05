@@ -1,0 +1,59 @@
+#!/usr/bin/env bash
+# cc-install-remote-agent — install (or remove) a launchd LaunchAgent that keeps
+# bin/cc-remote-bridge running, so remote Claude Code sessions can reach this Mac
+# whether or not any terminal is open.
+#
+# The supervisor rediscovers hosts every 30s (from the tmux-watch hub panes plus
+# ~/.claude/notify.remote-hosts) and keeps one ssh streamer per host, reconnecting
+# on its own. The plist points at THIS dir's cc-remote-bridge, so re-run after a
+# plugin update to re-point it.
+#
+# Usage:  cc-install-remote-agent            # install + load
+#         cc-install-remote-agent --uninstall
+set -u
+
+LABEL="com.farishijazi.cc-notify-remote"
+here="$(cd "$(dirname "$0")" && pwd)"
+bridge="$here/cc-remote-bridge"
+plist="$HOME/Library/LaunchAgents/$LABEL.plist"
+domain="gui/$(id -u)"
+
+unload() { launchctl bootout "$domain/$LABEL" 2>/dev/null; launchctl unload "$plist" 2>/dev/null; }
+
+if [ "${1:-}" = "--uninstall" ]; then
+  unload; rm -f "$plist"
+  "$bridge" --stop >/dev/null 2>&1
+  echo "removed $LABEL"
+  exit 0
+fi
+
+[ -x "$bridge" ] || { echo "error: cc-remote-bridge not found/executable at $bridge" >&2; exit 1; }
+mkdir -p "$HOME/Library/LaunchAgents" /tmp/cc-notify
+
+# PATH matters: the supervisor shells out to ssh and tmux, and launchd's default
+# PATH omits /opt/homebrew/bin (where tmux and alerter live on Apple Silicon).
+cat > "$plist" <<PLIST
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>            <string>$LABEL</string>
+  <key>ProgramArguments</key> <array><string>$bridge</string></array>
+  <key>KeepAlive</key>        <true/>
+  <key>RunAtLoad</key>        <true/>
+  <key>ProcessType</key>      <string>Background</string>
+  <key>EnvironmentVariables</key>
+  <dict><key>PATH</key><string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string></dict>
+  <key>StandardErrorPath</key><string>/tmp/cc-notify/remote-agent.log</string>
+</dict>
+</plist>
+PLIST
+
+unload
+if launchctl bootstrap "$domain" "$plist" 2>/dev/null || launchctl load "$plist" 2>/dev/null; then
+  echo "installed $LABEL → $bridge"
+  echo "  hosts: $("$bridge" --hosts | tr '\n' ' ')"
+  echo "  log:   /tmp/cc-notify/remote-bridge.log"
+else
+  echo "error: failed to load $plist" >&2; exit 1
+fi

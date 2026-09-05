@@ -329,3 +329,118 @@ The same primitive answers "is the user typing *right now*" for anything else
 that wants it — cc-notify uses `cc-prompt-state --watch` to clear a banner on
 the first keystroke, comparing against a snapshot taken when the banner appeared
 so a pre-existing draft doesn't count as a fresh keystroke.
+
+## 21. Session color has NO programmatic API — but `/color` takes an inline argument
+
+Researched exhaustively (docs, GitHub issues, `strings` over the v2.1.222
+binary): a **running** session's color can only be changed from inside its own
+TUI. No CLI flag, env var, settings key, SessionStart-hook output field, or SDK
+option exists (each has an open feature request). Externally appending an
+`{"type":"agent-color",…}` line to the transcript does nothing live — the TUI
+keeps color in-process and only re-reads it on resume. A hidden
+`--agent-color <color>` launch flag exists (teammate spawning), but it feeds
+in-memory state and writes **no transcript line**, so transcript-reading tools
+never see it.
+
+Two facts make self-service possible anyway: `/color` accepts an inline
+argument (`/color purple` — full list red/orange/yellow/green/blue/purple/pink/
+cyan/default), and it's a *local* command (applies instantly, no API turn, no
+Stop hook). So a hook CAN recolor its own session by typing into its own tmux
+pane — through the #20 `cc-prompt-state` dance, never blind. That's v1.7.17's
+`.cc/settings.json` color sync (`hooks/cc-color-apply.sh`).
+
+**Corollary — anchor transcript greps the moment they drive actuation.** The
+loose `"agentColor":"[^"]*"` match was fine when it only picked a banner emoji,
+but a transcript that merely *quotes* such a string (any session developing
+cc-notify!) would have leaked quoted colors into `.cc/settings.json` and
+recolored future sessions. Real records are whole lines — match
+`^{"type":"agent-color",…` (verified: anchored count == loose count across real
+transcripts). Display can tolerate false positives; actuation can't.
+
+## 22. Remote sessions: the hard half is already solved by whatever DISPLAYS them
+
+"Notify me about Claude Code running on another machine" looks like one problem
+and is really two, and only one of them is hard:
+
+1. **Signal out** — get the event home. Easy, and there are four ways.
+2. **Route back** — make a click land somewhere useful. This is the one that
+   normally kills the feature… unless something already answers "where is that
+   remote session visible on this Mac?"
+
+For cc-notify that something is **tmux-watch**, which tiles remote tmux sessions
+into a local hub and tags each pane `@tw-src = "<host>\t<session>"`. That tag is a
+stable address (it survives pane renumbering, and inner programs rewriting the
+title can't corrupt it), so `pane = f(host, session)` is one `tmux list-panes -a`.
+Once you have the pane, "focus a remote session" reduces to "focus a local pane" —
+the code that already existed. **Before designing a routing scheme, look for a
+component whose whole job is displaying the thing; it is holding the key.**
+
+**Transport: prefer the Mac pulling over the remote pushing.** Four options
+weighed: `ssh -R` reverse socket (dies with the ssh session, only reaches the
+attached Mac), ntfy/webhook (third party sees your data), OSC escape sequences
+(not clickable, terminal-specific), and a local `ssh <host> tail -F <events>`
+streamer. The streamer wins on the axis that matters: it works whether or not
+anyone is attached, reconnects on its own, and every Mac running one gets the
+banner. It is also where **identity translation** has to live: the remote knows
+only its own `hostname`, while the local pane is keyed by the **ssh alias** you
+connect with (`ftower`). The streamer is the one process that knows both, so it
+stamps the alias — no mapping table, no configuration.
+
+**Split it so policy has one home.** The remote reports only facts its own
+machine can know (transcript colour/title/outcome token, tmux coordinates, cwd,
+branch); the Mac owns every decision about what that becomes. Concretely: the
+facts→banner block was extracted from the local hook into `cc_present` and is
+called by both paths, so local and remote presentation cannot drift — and the
+remote half needs no redeployment when the vocabulary changes. It also keeps the
+remote dependency-free (sed for the hook payload, grep for the transcript), which
+matters: boxes running Claude Code's native installer have no `node` on PATH.
+
+**Rotate an append-only event file by RENAME, never by truncation.** `tail -F`
+follows the path: on rename it picks up the new empty file and reads nothing,
+while an in-place truncate makes it re-read from offset 0 and replay every line
+as a fresh event.
+
+**Replay a little on reconnect, and dedupe by timestamp.** `tail -n 0` after a
+blip silently swallows the "done" ping you were waiting for. Replaying the last
+60s fixes that but re-fires banners — and, worse, re-fires a 🚨 auto-focus. Keep
+the last handled timestamp per host and drop anything not newer. Whole seconds
+are not enough (two events in one second → one dropped); use `$EPOCHREALTIME`,
+with `LC_ALL=C` so the decimal separator is a dot.
+
+## 23. A LaunchAgent has NONE of your shell's environment — `set -u` turns that into a silent half-write
+
+The bridge worked perfectly when run from a terminal and failed under launchd
+with no error: the route file it writes was **truncated mid-way** and no banner
+appeared. Cause: the route includes `tmux_socket=${TMUX%%,*}`, and under launchd
+`$TMUX` is unset. With `set -u` that is a fatal error, thrown *inside* a
+`{ …; } > file` block — so the file was created, partially written, and the
+function never reached the banner.
+
+Two lessons, both general:
+
+- **Every `$VAR` a daemon reads must be `${VAR:-}`.** A LaunchAgent inherits no
+  `TMUX`, `TERM_PROGRAM`, `SSH_CONNECTION`, or `PATH` beyond what its plist sets
+  (do set `PATH` — launchd's default omits `/opt/homebrew/bin`, where `tmux` and
+  `alerter` live). Test with `env -i HOME=$HOME PATH=… bash script` before
+  trusting a launchd run; it reproduces the failure in one command.
+- **`set -u` inside an output redirection fails PARTIALLY.** The artifact exists
+  and looks plausible — the tell was a 55-byte route file where a good one is
+  184. When a script writes a record, a truncated record is a louder bug than a
+  missing one; check sizes/line counts, not just existence.
+
+## 24. `aerospace focus --pid` is a coin flip for Terminal.app — bridge AppleScript and Aerospace on the window TITLE
+
+Terminal.app runs **many windows under one pid**, so
+`aerospace list-windows --pid <pid> | head -1` focuses an arbitrary one. Locally
+cc-notify dodges this by capturing the exact window id at SessionStart, when the
+user was demonstrably looking at the right window — a session on another machine
+has no such moment.
+
+The two tools each know half the answer: only **AppleScript** can say which
+window holds a given tty (`tty of t` over `tabs of w`), and only **Aerospace** can
+focus a window across workspaces (LESSONS #10). They have no shared identifier —
+but they report the **window title** identically (`farishijazi — tmux attach -t
+hub/… — 212×68`), so matching on it converts one to the other exactly. That is
+`cc_wid_for_tty`, and it is worth remembering as a general pattern: when two
+tools address the same object with incompatible ids, look for a *rendered* field
+both derive from the same source.

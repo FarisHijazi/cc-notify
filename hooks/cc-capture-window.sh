@@ -89,10 +89,28 @@ if [ "$full" = 1 ]; then
   # works on `claude --resume` (new terminal, no prior route) and fresh sessions
   # alike. + color/title from the transcript. Detached so the hook returns fast.
   cc_detect_terminal
+  cc_session_meta "$transcript_path" "$(basename "${cwd:-$PWD}")"
   if [ "$CC_TERM" = "vscode" ] && [ -n "$CC_SHELL_PIDS" ]; then
-    cc_session_meta "$transcript_path" "$(basename "${cwd:-$PWD}")"
     name=$(cc_tab_name "$(cc_status_emoji "$status")" "$CC_COLOR_EMOJI" "$CC_TITLE")
     ( cc_write_tab "$session_id" "$CC_SHELL_PIDS" "$name" </dev/null >/dev/null 2>&1 & )
+  fi
+  # Project color sync via <cwd>/.cc/settings.json (key "color"). Direction is
+  # strictly one-way per event, so the two writers can never race each other:
+  #   SessionStart      → settings WIN: apply the configured color to the session
+  #                       by typing `/color <name>` into its own pane (no
+  #                       programmatic API exists — see cc-color-apply.sh).
+  #   UserPromptSubmit  → session WINS: persist its /color into the settings
+  #                       (also done on Stop/Notification in cc-notify.sh).
+  # Both detached; apply needs the session to be tmux-hosted.
+  if [ "$event" = "SessionStart" ]; then
+    if [ -n "$CC_TMUX_TARGET" ]; then
+      want=$(cc_color_settings "${cwd:-$PWD}")
+      if [ -n "$want" ] && [ "$want" != "${CC_COLOR_NAME:-default}" ]; then
+        ( bash "$script_dir/cc-color-apply.sh" "$CC_TMUX_TARGET" "$want" </dev/null >/dev/null 2>&1 & )
+      fi
+    fi
+  else
+    [ -n "$CC_COLOR_NAME" ] && ( cc_color_persist "${cwd:-$PWD}" "$CC_COLOR_NAME" </dev/null >/dev/null 2>&1 & )
   fi
 else
   # Cheap: just re-write the leading status emoji on the existing .tab. Detached.

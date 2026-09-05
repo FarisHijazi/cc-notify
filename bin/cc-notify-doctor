@@ -61,3 +61,23 @@ if [ -n "$plugin" ]; then
 else
   echo "  ✗ no plugin cache dir found"
 fi
+
+bold "== 7. Remote sessions (bridge) =="
+if [ -f "$HOME/.claude/notify.disable_remote" ]; then
+  echo "  ✗ DISABLED by ~/.claude/notify.disable_remote"
+else
+  here_bin="$(cd "$(dirname "$0")" && pwd)"
+  echo "  supervisor: $(launchctl list 2>/dev/null | awk '/cc-notify-remote/{print "loaded pid="$1} END{if(!NR) print "NOT installed (run bin/cc-install-remote-agent)"}')"
+  echo "  hosts:      $("$here_bin/cc-remote-bridge" --hosts 2>/dev/null | tr '\n' ' ')"
+  for f in /tmp/cc-notify/bridge-*.pid; do
+    [ -f "$f" ] || continue
+    h=$(basename "$f" .pid); h=${h#bridge-}
+    [ "$h" = supervisor ] && continue
+    p=$(cat "$f" 2>/dev/null)
+    kill -0 "$p" 2>/dev/null && echo "  streamer $h: alive (pid $p)" || echo "  streamer $h: DEAD (stale pidfile)"
+  done
+  echo "  hub panes (a remote session can only be clicked to if it is tiled into one):"
+  tmux list-panes -a -F '    #{pane_id} #{@tw-src} @cc-status=#{@cc-status}' 2>/dev/null \
+    | awk 'NF>2' | sed 's/\t/:/' | head -20
+  echo "  log: /tmp/cc-notify/remote-bridge.log"
+fi
