@@ -133,3 +133,29 @@ on Debian (thmanyah).
 `$TMUX`, so a test must fake it as `<socket_path>,<server_pid>,<session_id>` —
 a bogus socket path silently yields an empty session name and the hook exits 0
 having done nothing, which reads exactly like "the hook is broken".
+
+## Addendum (20:35) — window reuse missed the box-side hub entirely
+
+Reported: dema sessions still opened new Ghostty windows although they were on
+screen in an `ssh dema` + `tw` window. `cc_focus_named_terminal` only ever looked
+for a tab titled `"<session> · "`, and `cc_hub_pane` only reads LOCAL panes —
+neither can see a hub that lives on the remote box. Live titles at the time:
+
+```text
+hub/farishijazi__3652b2 · fm3        Mac-side hub   (cc_hub_pane path, worked)
+hub/thmanyah-local-service__96336b · fm3
+hub/service__eec13a · dema           hub ON dema    (no local @tw-src at all)
+```
+
+`cc_remote_hub_pane` (cc-lib.sh) + a new tier in cc-focus.sh's fallback. Verified
+against the live boxes with `focus` and the remote `select-pane` neutered so
+nothing on screen moved:
+
+```text
+demaenergy_d-5    → hub/service__eec13a %562 → aerospace window 11270
+control-service-2 → hub/service__eec13a %554 → aerospace window 11270
+not-in-any-hub    → falls through and materializes (unchanged)
+```
+
+window 11270 is `hub/service__eec13a · dema`. See @../../LESSONS.md #27 for the
+attached-hub preference and the `exit`-still-runs-`END` awk trap.

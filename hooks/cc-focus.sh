@@ -32,6 +32,21 @@ if [ -n "${remote_host:-}" ]; then
       echo "focused existing window showing ${remote_host}:${remote_sess}"
       exit 0
     fi
+    # Still nothing? The hub may live ON the box (ssh + tw there), in which case
+    # the local window is titled after the HUB session, not this one. Focus that
+    # window and move the remote hub's active pane onto the session.
+    hub=$(cc_remote_hub_pane "$remote_host" "$remote_sess")
+    if [ -n "$hub" ]; then
+      tab=$(printf '\t')
+      hub_sess="${hub%%"$tab"*}"; hub_pane="${hub##*"$tab"}"
+      if cc_focus_named_terminal "$hub_sess"; then
+        ssh -o BatchMode=yes -o ConnectTimeout=5 "$remote_host" \
+            "tmux select-window -t '$hub_pane' 2>/dev/null; tmux select-pane -t '$hub_pane' 2>/dev/null" \
+            >/dev/null 2>&1 &
+        echo "focused ${remote_host} hub '${hub_sess}' on pane ${hub_pane} (${remote_sess})"
+        exit 0
+      fi
+    fi
     # Nothing on this Mac is showing it — materialize the view. A click is an
     # explicit user action, so opening a window is what they asked for. The
     # session name comes from another machine: only ever pass a plain tmux name.

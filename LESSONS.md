@@ -523,3 +523,36 @@ Verified with three real typists racing into one live Claude pane (`/color
 purple` from SessionStart, `/color blue`, `/compact`): all three applied in
 sequence, box empty afterwards. Mutual exclusion + stale-break also tested on
 macOS and Debian.
+
+## 27. There are TWO watch topologies, and the window is titled after the HUB
+
+`cc_hub_pane` answers "which LOCAL pane is displaying `<host>:<session>`" by
+reading `@tw-src` off local panes. That is the whole answer only when the
+tmux-watch hub runs on the Mac. The other topology — `ssh <host>` in a Ghostty
+window and run `tw` THERE — puts the hub on the remote box: **nothing local
+carries `@tw-src`**, so the click concluded "nothing here is showing it" and
+materialized a second window onto a session already visible on screen.
+
+The tell is the window title. `set-titles-string '#S · #h'` names the tmux
+session the client is attached to, which for this topology is the HUB:
+
+```text
+hub/farishijazi__3652b2 · fm3     Mac-side hub  → cc_hub_pane resolves it
+hub/service__eec13a · dema        hub ON dema   → nothing local to match
+```
+
+`cc_remote_hub_pane <host> <sess>` closes it with one ssh: list the remote
+panes, find the one whose `@tw-src` session field is `<sess>`, return
+`<hub_session>\t<pane_id>`. Then focus the local window titled
+`"<hub_session> · "` and `select-pane` the remote hub onto it. Two details that
+matter:
+
+- **Prefer an ATTACHED hub.** A box can hold several hub sessions (dema had
+  three); an unattached one is on nobody's screen, so focusing a window named
+  after it finds nothing and the click silently does nothing.
+- **`exit` in awk still runs `END`.** The first version printed the attached hub
+  *and* the fallback — two lines, and the caller's `${hub%%…}` split produced a
+  session name with a newline in it. Guard END with the same flag.
+
+Also: `cc_focus_named_terminal`'s injection guard had to learn `/`, since every
+hub session is named `hub/<user>__<hash>`.
