@@ -487,3 +487,39 @@ error anywhere. `set n to name of t` **before** the `focus`, and return `n`.
 The general rule: in AppleScript, treat every element reference as live. Any
 command that can reorder, close or open windows invalidates every reference you
 are holding, including the loop variable you are standing on.
+
+## 26. Two hooks, one input box: the check-type-verify dance needs a LOCK
+
+`cc-color-apply.sh` types `/color <name>` on SessionStart and the out-of-repo
+`~/.claude/hooks/auto-compact-continue.sh` types `/compact` (or the continue
+message) at a turn boundary — into the SAME pane. **PostCompact fires both at
+the same instant.** Each one is individually correct and fails closed, and that
+is exactly what makes the collision invisible: each checks the box is empty,
+types, then re-reads and finds *the other one's text glued to its own*, so both
+abort without pressing Enter. Neither command is ever submitted, and the loser's
+text is left sitting in the box for whatever types there next to submit along
+with its own. Real log lines, same second:
+
+```text
+colorsync.log      cctest: ABORT before Enter — box holds '/color bluecontinue and complete all…', expected '/color blue'
+cc-autocompact.log cctest: ABORT before Enter — box is 'bluecontinue and complete all…', expected 'continue and complete all…'
+```
+
+That is where the mystery `orange`/`blue` prefixes on auto-compact messages came
+from — not a parsing bug, a second writer.
+
+`bin/cc-type-lock.sh` is a sourceable mkdir-lock (macOS has no `flock`) held
+across the whole dance. Three things it must get right:
+
+- **Key on `#{pane_id}`, not the caller's target string.** The two callers name
+  the same pane differently (`farishijazi-3` vs `farishijazi-3:0.0`); keying on
+  the string gives two locks and no exclusion at all.
+- **Break a dead holder's lock** (pid recorded in the dir, `kill -0`), or one
+  crash inside the dance wedges every later apply.
+- **No pane id → return success WITHOUT a lock.** This is best-effort ordering;
+  it must never become a reason to skip the work.
+
+Verified with three real typists racing into one live Claude pane (`/color
+purple` from SessionStart, `/color blue`, `/compact`): all three applied in
+sequence, box empty afterwards. Mutual exclusion + stale-break also tested on
+macOS and Debian.

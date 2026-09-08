@@ -43,6 +43,11 @@ command -v tmux >/dev/null 2>&1 || PATH="/opt/homebrew/bin:/usr/local/bin:$PATH"
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 prompt_state="$script_dir/../bin/cc-prompt-state"
 [ -x "$prompt_state" ] || exit 0   # fail closed: can't verify the box → do nothing
+# Serialise against the other hook that types into this same pane (the
+# auto-compact continue message). Absent → best-effort, no locking.
+# shellcheck source=../bin/cc-type-lock.sh
+[ -r "$script_dir/../bin/cc-type-lock.sh" ] && . "$script_dir/../bin/cc-type-lock.sh"
+command -v cc_type_lock >/dev/null 2>&1 || { cc_type_lock() { :; }; cc_type_unlock() { :; }; }
 
 mkdir -p /tmp/cc-notify 2>/dev/null
 log() { printf '[%s] %s\n' "$(date '+%F %T')" "$*" >>/tmp/cc-notify/colorsync.log 2>/dev/null; }
@@ -52,7 +57,12 @@ deadline=$(( $(date +%s) + ${CC_COLOR_APPLY_TIMEOUT:-25} ))
 while [ "$(date +%s)" -lt "$deadline" ]; do
   "$prompt_state" "$target" >/dev/null 2>&1
   case $? in
-    0)  # box drawn and empty — type, verify, submit
+    0)  # box drawn and empty — take the pane's type-lock, re-check, then type
+      cc_type_lock "$target" || { log "$target: SKIP — another hook holds the type-lock"; exit 1; }
+      if ! "$prompt_state" "$target" >/dev/null 2>&1; then
+        cc_type_unlock                 # it filled up while we waited for the lock
+        sleep 1; continue
+      fi
       tmux send-keys -t "$target" -l -- "$want" 2>/dev/null || { log "$target: send-keys failed"; exit 1; }
       sleep "${CC_COLOR_ENTER_DELAY:-1}"
       cur=$("$prompt_state" --raw "$target" 2>/dev/null)
