@@ -364,11 +364,41 @@ cc_hub_pane() {
 # Used before materializing a new window: a previous click (or the user) may
 # already have one open, and stacking another on top of it is the one thing a
 # click should never do. Returns 0 only when something was really focused.
+# Find the tmux-watch hub ON THE REMOTE BOX that is displaying <host>:<sess>.
+#
+# There are two watch topologies and cc_hub_pane only sees one of them. When the
+# hub runs on this Mac, its panes are local and carry @tw-src — cc_hub_pane
+# resolves them. When you instead `ssh <host>` and run `tw` THERE, the hub is a
+# tmux session on that box, attached from a Ghostty window: nothing local
+# carries @tw-src, so every click used to conclude "nothing here is showing it"
+# and materialize a SECOND window onto a session already on screen.
+#
+# One ssh, cheap, only on the fallback path (the click is about to ssh anyway).
+# Prints "<hub_session>\t<pane_id>"; empty when the box shows no hub for it.
+# Attached hubs win: an unattached one is not on anybody's screen.
+cc_remote_hub_pane() {
+  local host="$1" sess="$2"
+  [ -n "$host" ] && [ -n "$sess" ] || return 0
+  case "$sess" in *[!A-Za-z0-9._-]*) return 0 ;; esac
+  ssh -o BatchMode=yes -o ConnectTimeout=5 "$host" \
+      "tmux list-panes -a -F '#{session_attached}|#{session_name}|#{pane_id}|#{@tw-src}' 2>/dev/null" 2>/dev/null \
+    | awk -F'|' -v s="$sess" '
+        {
+          n = split($4, tw, "\t")            # @tw-src = "<host>\t<session>"
+          if (n < 2 || tw[2] != s) next
+          if ($1 + 0 > 0) { print $2 "\t" $3; hit = 1; exit }   # attached — take it
+          if (best == "") best = $2 "\t" $3
+        }
+        END { if (!hit && best != "") print best }   # awk runs END after exit'
+}
+
 cc_focus_named_terminal() {
   local sess="$1" name="" wid=""
   [ -n "$sess" ] || return 1
   [ -d /Applications/Ghostty.app ] || return 1
-  case "$sess" in ""|*[!A-Za-z0-9._-]*) return 1 ;; esac
+  # '/' is allowed: tmux-watch hub sessions are named "hub/<user>__<hash>", and
+  # a REMOTE hub's window is the only thing showing its watched sessions.
+  case "$sess" in ""|*[!A-Za-z0-9._/-]*) return 1 ;; esac
   name=$(osascript 2>/dev/null <<OSA
 tell application "Ghostty"
   repeat with w in windows
