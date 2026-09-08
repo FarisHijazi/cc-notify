@@ -12,12 +12,23 @@
 # and fail closed when the box can't be read at all. A missed recolor is
 # harmless; typing into a half-written message is not.
 #
+# The read-back MUST use --raw: Claude Code colours a recognised slash command,
+# and the default reading drops coloured runs as decoration, so `/color orange`
+# came back as plain `orange` and every single apply aborted one keystroke before
+# Enter — leaving `/color orange` sitting unsent in the box for the next thing
+# that typed there to submit along with its own text. Enter also needs a beat
+# after the text (the TUI is still opening the slash-command menu) and a
+# read-back afterwards, because a swallowed Enter looks exactly like success.
+#
 # Usage: cc-color-apply.sh <tmux-target> <color>
 # Spawned detached by cc-capture-window.sh on SessionStart when
 # <cwd>/.cc/settings.json holds {"color": ...} differing from the session's own.
 # Off switch: CC_NO_COLOR_SYNC=1 or ~/.claude/notify.disable_color_sync.
 # Knobs: CC_COLOR_APPLY_TIMEOUT (25s) — how long to wait for the box to appear
 # (covers TUI startup and a pending trust dialog); poll is 1s.
+#        CC_COLOR_ENTER_DELAY (1s)   — pause between the text and Enter.
+#        CC_COLOR_CONFIRM_SECS (10s) — how long to keep re-pressing Enter while
+#                                      the text is still sitting in the box.
 set -uo pipefail
 
 target="${1:-}"; color="${2:-}"
@@ -43,8 +54,8 @@ while [ "$(date +%s)" -lt "$deadline" ]; do
   case $? in
     0)  # box drawn and empty — type, verify, submit
       tmux send-keys -t "$target" -l -- "$want" 2>/dev/null || { log "$target: send-keys failed"; exit 1; }
-      sleep 0.3
-      cur=$("$prompt_state" "$target" 2>/dev/null)
+      sleep "${CC_COLOR_ENTER_DELAY:-1}"
+      cur=$("$prompt_state" --raw "$target" 2>/dev/null)
       if [ "$cur" != "$want" ]; then
         # User typed in the gap — leave whatever is there UNSENT (visible,
         # harmless); backspacing would eat the characters they just typed.
@@ -52,6 +63,16 @@ while [ "$(date +%s)" -lt "$deadline" ]; do
         exit 1
       fi
       tmux send-keys -t "$target" Enter 2>/dev/null
+      # A swallowed Enter leaves the command in the box looking submitted. Keep
+      # pressing while it is still there; stop the moment it clears.
+      end=$(( $(date +%s) + ${CC_COLOR_CONFIRM_SECS:-10} )); n=0
+      while :; do
+        sleep 0.5
+        [ "$("$prompt_state" --raw "$target" 2>/dev/null)" = "$want" ] || break
+        [ "$(date +%s)" -ge "$end" ] && { log "$target: '$want' STILL unsent after ${CC_COLOR_CONFIRM_SECS:-10}s"; exit 1; }
+        tmux send-keys -t "$target" Enter 2>/dev/null; n=$(( n + 1 ))
+      done
+      [ "$n" -gt 0 ] && log "$target: '$want' went through after $n extra Enter(s)"
       log "$target: applied '$want'"
       exit 0 ;;
     1)  # box has text — the user beat us to the keyboard; back off entirely

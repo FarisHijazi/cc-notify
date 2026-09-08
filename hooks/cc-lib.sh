@@ -332,11 +332,69 @@ cc_present() {
 # Local pane id displaying <host>:<tmux session> → stdout ("" if not shown here).
 # host="" means a LOCAL tmux session (tmux-watch stores an empty host field).
 cc_hub_pane() {
-  local host="$1" sess="$2"
+  local host="$1" sess="$2" panes out
   [ -n "$sess" ] || return 0
   command -v tmux >/dev/null 2>&1 || return 0
-  tmux list-panes -a -F '#{pane_id}	#{@tw-src}' 2>/dev/null \
-    | awk -F'\t' -v h="$host" -v s="$sess" '$2==h && $3==s {print $1; exit}'
+  panes=$(tmux list-panes -a -F '#{pane_id}	#{@tw-src}' 2>/dev/null) || return 0
+
+  # 1. exact — the host string the bridge stamped IS how the hub was built.
+  out=$(printf '%s\n' "$panes" | awk -F'\t' -v h="$host" -v s="$sess" '$2==h && $3==s {print $1; exit}')
+  [ -n "$out" ] && { printf '%s' "$out"; return 0; }
+
+  # 2. the same box under a different alias. `tw-remote` builds hubs from
+  #    `faris@dema-dev:~` while the bridge streams `dema`; without this the click
+  #    finds nothing and materializes a SECOND window onto a session that is
+  #    already on screen. Strip user@, any :port/:path, case, a .local suffix.
+  out=$(printf '%s\n' "$panes" | awk -F'\t' -v h="$host" -v s="$sess" '
+    function key(x) { sub(/^[^@]*@/, "", x); sub(/:.*$/, "", x); x = tolower(x); sub(/\.local$/, "", x); return x }
+    $3 == s && key($2) == key(h) { print $1; exit }')
+  [ -n "$out" ] && { printf '%s' "$out"; return 0; }
+
+  # 3. the session NAME alone, but only when exactly one REMOTE watch pane
+  #    carries it (an empty host is a LOCAL session, which this is not). Session
+  #    names are far more distinctive than host aliases, so this catches every
+  #    remaining way of spelling the same box — and stays silent the moment two
+  #    machines genuinely run a session of the same name.
+  printf '%s\n' "$panes" | awk -F'\t' -v s="$sess" '$2 != "" && $3 == s { n++; p = $1 } END { if (n == 1) print p }'
+}
+
+# Focus a terminal window that is ALREADY showing tmux session $1, on any host.
+# Ghostty names each tab after the tmux title, which .tmux.conf pins to
+# "<session> · <host>" — so the session name plus that separator identifies it.
+# Used before materializing a new window: a previous click (or the user) may
+# already have one open, and stacking another on top of it is the one thing a
+# click should never do. Returns 0 only when something was really focused.
+cc_focus_named_terminal() {
+  local sess="$1" name="" wid=""
+  [ -n "$sess" ] || return 1
+  [ -d /Applications/Ghostty.app ] || return 1
+  case "$sess" in ""|*[!A-Za-z0-9._-]*) return 1 ;; esac
+  name=$(osascript 2>/dev/null <<OSA
+tell application "Ghostty"
+  repeat with w in windows
+    repeat with t in tabs of w
+      -- Read the name BEFORE focusing: `t` is an index-based reference and
+      -- `focus` reorders Ghostty's window list, so a `name of t` afterwards
+      -- resolves to a DIFFERENT tab (it returned the wrong window every time).
+      set n to name of t
+      if n starts with "$sess · " then
+        focus (focused terminal of t)
+        return n
+      end if
+    end repeat
+  end repeat
+  return ""
+end tell
+OSA
+)
+  [ -n "$name" ] || return 1
+  # AppleScript focused the tab; only aerospace can bring its workspace along.
+  if command -v aerospace >/dev/null 2>&1; then
+    wid=$(aerospace list-windows --monitor all --format '%{window-id}|%{window-title}' 2>/dev/null \
+      | awk -F'|' -v n="$name" '{ id=$1; sub(/^[^|]*\|/,""); if ($0==n) { print id; exit } }')
+    [ -n "$wid" ] && aerospace focus --window-id "$wid" >/dev/null 2>&1
+  fi
+  return 0
 }
 
 # Show a session's live status on its hub pane's border, so the hub doubles as a

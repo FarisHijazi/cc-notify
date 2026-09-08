@@ -216,6 +216,8 @@ working. Add `.cc/` to your `.gitignore`.
 CC_NO_COLOR_SYNC=1                            # env off-switch
 touch ~/.claude/notify.disable_color_sync     # file off-switch
 CC_COLOR_APPLY_TIMEOUT=25                     # how long to wait for the input box
+CC_COLOR_ENTER_DELAY=1                        # pause between the text and Enter
+CC_COLOR_CONFIRM_SECS=10                      # keep re-pressing Enter for this long
 ```
 
 You can also just edit `.cc/settings.json` by hand — any of
@@ -281,8 +283,17 @@ or python needed there; all JSON work happens on the Mac.
    click handler, plus a live status on the hub pane's border.
 4. Clicking re-resolves the pane **at click time** from `@tw-src` — panes come
    and go — then focuses it exactly as a local session: Aerospace window, tmux
-   session/window/pane. If nothing on this Mac is showing the session, it opens
-   a Terminal window attached to it instead.
+   session/window/pane. The host is matched loosely (`dema`,
+   `faris@dema-dev:~` and `dema.local` are one box) and, failing that, on the
+   session name when only one remote pane carries it. With no hub pane it
+   focuses a window already attached to that session — matched on the tmux
+   title, `"<session> · <host>"` — and only opens a new window when there is
+   genuinely nothing on screen showing it.
+
+   That title match needs `set-titles on` with a stable `set-titles-string` on
+   the **remote** tmux. It is a per-server option read at server start, so a
+   long-running server started before you added those lines still has
+   `set-titles off` — check with `tmux show -g set-titles` on the box.
 
 The hub pane border becomes a status board: `⏳ 🟢 deploy api` for a remote
 session, exactly like the terminal-tab titles local sessions get (a remote
