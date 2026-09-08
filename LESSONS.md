@@ -310,8 +310,30 @@ with `❯`. A menu's cursor isn't bracketed that way, so it correctly reports "n
 input box" — which callers must treat as **unsafe to type into**, not as empty.
 This also handles multi-line drafts (the whole region is the content) and
 survives the slash-command autocomplete popup, which renders *above* the box and
-leaves the region intact (verified: typing `/compact` still reads back exactly
-`/compact`).
+leaves the region intact.
+
+**Two things about that row are not what they look like** (both cost a shipped
+feature; fixed in 1.8.2):
+
+- **A recognised slash command is drawn COLOURED**
+  (`ESC[38;5;153m/compact`), so the default default-foreground-only reading —
+  the very rule that keeps the prompt suggestion out — reports `""` for
+  `/compact` and `orange` for `/color orange`. A caller that types text and then
+  compares the read-back to it therefore ALWAYS aborts. Read back with `--raw`
+  (escapes stripped, colours kept) for that check, and keep the default reading
+  for the is-it-empty check beforehand: they are different questions.
+- **The marker is separated from the text by U+00A0**, and an empty row is
+  exactly `❯`+U+00A0. `[[:space:]]` matches U+00A0 on macOS but **not** under
+  glibc, so the same empty box read as empty on the Mac and as one character of
+  user input on Debian — every Linux box silently refused to type anything.
+  Fold U+00A0 before trimming. It is also the one reliable way to tell an UNSENT
+  row from the transcript echo of a submitted line, which uses an ordinary
+  space.
+
+**A swallowed Enter looks exactly like success.** Typing and pressing Enter are
+two keystrokes, and Enter can land while the TUI is still opening the
+slash-command menu. Pause (~1s) between them, and afterwards poll the input row
+and press Enter again for as long as the text is still there.
 
 **Check twice, and never "clean up".** Between the emptiness check and the
 `Enter` there is a real (if small) window for a keystroke. So: check empty →
@@ -444,3 +466,24 @@ hub/… — 212×68`), so matching on it converts one to the other exactly. That
 `cc_wid_for_tty`, and it is worth remembering as a general pattern: when two
 tools address the same object with incompatible ids, look for a *rendered* field
 both derive from the same source.
+
+## 25. AppleScript `focus` REORDERS the window list — read what you need before mutating
+
+```applescript
+repeat with t in tabs of w
+  if name of t starts with "<prefix>" then
+    focus (focused terminal of t)
+    return name of t          -- returns a DIFFERENT tab, every time
+  end if
+end repeat
+```
+
+`t` is an index-based reference (`tab N of window M`), not a snapshot. `focus`
+makes the target window frontmost, which renumbers `windows`, so the `name of t`
+evaluated afterwards resolves into the reordered list. The caller then looked up
+that wrong name in Aerospace and focused a completely unrelated window — with no
+error anywhere. `set n to name of t` **before** the `focus`, and return `n`.
+
+The general rule: in AppleScript, treat every element reference as live. Any
+command that can reorder, close or open windows invalidates every reference you
+are holding, including the loop variable you are standing on.

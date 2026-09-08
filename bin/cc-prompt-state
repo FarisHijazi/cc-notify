@@ -5,12 +5,20 @@
 # there is no hook, env var, or API for in-progress (unsubmitted) input. The
 # only observable is what the TUI has drawn, so we read the pane.
 #
-#   cc-prompt-state <tmux-target>
+#   cc-prompt-state [--raw] <tmux-target>
 #       stdout: the input box text ("" when empty)
 #       exit 0 = box found and EMPTY   (safe to send-keys into)
 #            1 = box found and has TEXT (user is typing — do NOT send-keys)
 #            2 = no input box found     (menu/dialog open, not a Claude TUI,
 #                                        or capture failed) — also unsafe
+#
+#   --raw reads the box with escapes merely STRIPPED instead of dropping
+#   coloured runs as decoration. The default reading is the right answer to "is
+#   the user typing?"; it is the WRONG answer to "is the text I just typed still
+#   sitting there?", because Claude Code colours a recognised slash command —
+#   "/compact" reads back as "" and "/color orange" as "orange". A caller that
+#   knows what it typed wants --raw for that read-back, and the default for the
+#   is-it-empty check beforehand.
 #
 #   cc-prompt-state --watch <tmux-target> [timeout_sec] [poll_sec]
 #       Blocks until the input box content CHANGES from what it was at start
@@ -27,8 +35,10 @@ set -uo pipefail
 # Detached callers (the banner worker) may not inherit a full PATH.
 command -v tmux >/dev/null 2>&1 || PATH="/opt/homebrew/bin:/usr/local/bin:$PATH"
 
+RAW=0        # --raw: report the clean reading, not the default-fg one
 RULE=$'─'    # ─ box border
 MARK=$'❯'    # ❯ prompt marker
+NBSP=$'\302\240' # U+00A0, the box's own padding — see normalize()
 ESC=$'\033'
 SEP=$'\001'
 
@@ -122,21 +132,29 @@ EOF
   case "${L[$(( d1 + 1 ))]}" in "$MARK"*) ;; *) return 2 ;; esac
 
   for (( i = d1 + 1; i < d2; i++ )); do
-    line="${T[$i]}"
+    if [ "$RAW" = 1 ]; then line="${L[$i]}"; else line="${T[$i]}"; fi
     [ "$i" -eq $(( d1 + 1 )) ] && line="${line#$MARK}"
     out="$out$line"
   done
   printf '%s' "$out"
 }
 
-# trim surrounding whitespace (the box pads the row), so whitespace-only → ""
-# and callers can compare the result to exactly what they meant to type
+# Trim surrounding whitespace (the box pads the row), so whitespace-only → ""
+# and callers can compare the result to exactly what they meant to type.
+#
+# U+00A0 is folded to a space FIRST because that is what Claude Code puts
+# between the ❯ and the text — an EMPTY row is exactly "❯"+U+00A0 — and
+# [[:space:]] matches it on macOS but NOT under glibc. Without the fold the same
+# empty box reads as "" on the Mac and as one character of "user input" on
+# Linux, which silently blocks every caller that only types into an empty box.
 normalize() {
-  local s="$1"
+  local s="${1//$NBSP/ }"
   s="${s#"${s%%[![:space:]]*}"}"
   s="${s%"${s##*[![:space:]]}"}"
   printf '%s' "$s"
 }
+
+[ "${1:-}" = "--raw" ] && { RAW=1; shift; }
 
 if [ "${1:-}" = "--watch" ]; then
   target="${2:-}"; timeout="${3:-120}"; poll="${4:-1}"
@@ -154,7 +172,7 @@ if [ "${1:-}" = "--watch" ]; then
 fi
 
 target="${1:-}"
-[ -n "$target" ] || { echo "usage: cc-prompt-state <tmux-target> | --watch <target>" >&2; exit 2; }
+[ -n "$target" ] || { echo "usage: cc-prompt-state [--raw] <tmux-target> | --watch <target>" >&2; exit 2; }
 text="$(box_text "$target")" || exit 2
 text="$(normalize "$text")"
 printf '%s' "$text"

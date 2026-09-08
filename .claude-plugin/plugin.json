@@ -1,7 +1,7 @@
 {
   "name": "cc-notify",
   "description": "Native macOS notifications + click-to-focus for Claude Code. Banners fire on Notification and Stop events; clicking navigates to the exact Ghostty/Terminal.app window, Aerospace workspace, and tmux session/window/pane. Also: per-session color/name, live status terminal tabs, outcome tokens, and remote sessions over SSH.",
-  "version": "1.8.1",
+  "version": "1.8.2",
   "author": {
     "name": "Faris Hijazi"
   },

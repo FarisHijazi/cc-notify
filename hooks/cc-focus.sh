@@ -25,6 +25,13 @@ if [ -n "${remote_host:-}" ]; then
     gui_pid="$CC_GUI_PID"; editor_app="$CC_EDITOR_APP"; shell_pids="$CC_SHELL_PIDS"
     target_wid=$(cc_wid_for_tty "$CC_CLIENT_TTY" "$CC_GUI_PID" "$CC_TERM")
   else
+    # No hub pane — but a window may already be attached to this session from an
+    # earlier click. Focus that before creating anything: a click should land on
+    # the session, never pile a second window onto one already showing it.
+    if cc_focus_named_terminal "$remote_sess"; then
+      echo "focused existing window showing ${remote_host}:${remote_sess}"
+      exit 0
+    fi
     # Nothing on this Mac is showing it — materialize the view. A click is an
     # explicit user action, so opening a window is what they asked for. The
     # session name comes from another machine: only ever pass a plain tmux name.
