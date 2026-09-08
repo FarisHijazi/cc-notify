@@ -94,3 +94,42 @@ The auto-compact hook deliberately does NOT depend on `--raw`: it lives outside
 this repo and has to work against whatever plugin version a box happens to have,
 so it reads the raw input row itself (anchored on the same U+00A0). Its half is
 in `~/.claude/docs/devlog/claude_20260908-1930-autocompact-enter-and-nbsp.md`.
+
+## Addendum (20:15) — the collision the `--raw` fix exposed
+
+With `--raw` in place the read-back finally told the truth, and the truth was a
+race. The first live PostCompact after deploying it logged, in the same second:
+
+```text
+colorsync.log      farishijazi-3:0.0: ABORT before Enter — box holds '/color bluecontinue and complete all tasks the user asked for', expected '/color blue'
+cc-autocompact.log farishijazi-3:   ABORT before Enter — box is 'bluecontinue and complete all tasks the user asked for', expected 'continue and complete all tasks the user asked for'
+```
+
+Before the fix the same collision was there but unreadable: the colour hook's
+line said `box holds 'blue'` (the `/color ` prefix eaten as decoration), which
+looks like a parsing bug rather than a second writer. That is also the origin of
+the stray `orange` that once got prepended to an auto-compact message.
+
+Fix: `bin/cc-type-lock.sh`, a sourceable mkdir-lock keyed on `#{pane_id}` — see
+@../../LESSONS.md #26 for why the key, the stale-break and the
+no-lock-on-unknown-pane fallback all matter.
+
+**Test** (`race_test.sh`): launch a real Claude in an isolated tmux session, wait
+for the box, then fire three typists at once — SessionStart's own `/color purple`
+(from `.cc/settings.json`), an injected `/color blue`, and
+`auto-compact-continue.sh --force`. All three land in sequence:
+
+```text
+20:10:57 cctest-race:0.0: applied '/color purple'
+20:10:59 cctest-race:   sent '/compact'
+20:11:02 cctest-race:   applied '/color blue'
+```
+
+with the pane showing all three executed and the input box empty afterwards.
+Mutual exclusion and stale-lock breaking are unit-tested separately on macOS and
+on Debian (thmanyah).
+
+**Harness trap**: `auto-compact-continue.sh --force` resolves its session from
+`$TMUX`, so a test must fake it as `<socket_path>,<server_pid>,<session_id>` —
+a bogus socket path silently yields an empty session name and the hook exits 0
+having done nothing, which reads exactly like "the hook is broken".
