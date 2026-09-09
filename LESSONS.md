@@ -556,3 +556,31 @@ matter:
 
 Also: `cc_focus_named_terminal`'s injection guard had to learn `/`, since every
 hub session is named `hub/<user>__<hash>`.
+
+## 28. The click had a stale-version glob and one unlogged cliff
+
+Two separate reasons a click still opened a new window when the session was
+plainly on screen.
+
+**The hotkey ran a two-year-old script.** `bin/cc-banner-click` picked its focus
+script with a plain `for candidate in ~/.claude/plugins/cache/*/cc-notify/*/hooks/cc-focus.sh`.
+The cache keeps EVERY installed version and the glob is sorted ASCIIbetically, so
+it always took the LOWEST — `1.7.17`, which predates remote-session handling
+entirely: it returns 1, focuses nothing, and leaves the banner up. Sort the
+candidates with `sort -V` and take the last. Any "newest plugin copy" lookup has
+this bug latent in it; the auto-compact hook's `find_prompt_state` avoids it by
+comparing mtimes.
+
+**`cc_pane_route` failing was treated as "no window exists".** The remote branch
+read `if [ -n "$pane" ] && cc_pane_route "$pane"` — but those are two different
+questions. `cc_hub_pane` answers *is a pane displaying this session*;
+`cc_pane_route` answers *can I walk that pane's tmux client tty up to a GUI
+process*. The second can fail while the window is very much on screen, and the
+`else` branch went straight to materializing a second window onto it. When the
+pane was found, fall back to focusing **the hub session's own window by title**
+and `select-pane` onto the tile — never materialize.
+
+Both were invisible after the fact, because nothing recorded which tier
+answered and the panes/clients/windows are gone by the time anyone asks.
+`/tmp/cc-notify/focus-route.log` now logs every tier of the remote branch,
+including the materialize as an explicit "NOTHING on screen was showing it".

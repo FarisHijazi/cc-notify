@@ -55,9 +55,19 @@ printf '[%s] HOTKEY picked sid=%s\n' "$(date +%T)" "$session_id" >> /tmp/cc-noti
 } >> /tmp/cc-notify.gate.log
 
 # Try the plugin-installed focus script first; fall back to manual install path.
+#
+# The cache keeps EVERY installed version, and the glob is sorted ASCIIbetically,
+# so a plain `for` took 1.7.17 — two releases stale, and old enough to have no
+# remote-session handling at all (it returned 1 and the banner never dismissed).
+# Sort the cache entries by version, newest first.
 focus_rc=2
+# sort -V on the full paths: they share a prefix, so this orders by version
+# without depending on the home directory's depth. No match leaves the literal
+# pattern in the array, which simply fails the -x test below.
+cached=(~/.claude/plugins/cache/farishijazi-plugins/cc-notify/*/hooks/cc-focus.sh)
+newest_cached=$(printf '%s\n' "${cached[@]}" | sort -V | tail -1)
 for candidate in \
-  ~/.claude/plugins/cache/farishijazi-plugins/cc-notify/*/hooks/cc-focus.sh \
+  "$newest_cached" \
   ~/projects/claude-plugins/plugins/cc-notify/hooks/cc-focus.sh \
   ~/.claude/hooks/cc-focus.sh; do
   if [ -x "$candidate" ]; then
