@@ -17,18 +17,42 @@ route_file="/tmp/cc-notify/${session_id}.route"
 # from the stable key (tmux-watch's @tw-src = "<host>\t<session>") and rebuild the
 # routing from the pane that is displaying it. Everything below then runs exactly
 # as it does for a local session.
+# Every tier is logged: "it opened a new window again" is otherwise unfalsifiable
+# after the fact — the panes, clients and windows it looked at are all gone by the
+# time anyone asks. /tmp/cc-notify/focus-route.log says which tier answered.
+rlog() { printf '[%s] %s\n' "$(date '+%F %T')" "$*" >>/tmp/cc-notify/focus-route.log 2>/dev/null; }
+
 if [ -n "${remote_host:-}" ]; then
   remote_sess="${remote_tmux%%:*}"
   pane=$(cc_hub_pane "$remote_host" "$remote_sess")
+  rlog "${remote_host}:${remote_sess} — cc_hub_pane=${pane:-none}"
   if [ -n "$pane" ] && cc_pane_route "$pane"; then
     term="$CC_TERM"; tmux_target="$CC_TMUX_TARGET"; client_tty="$CC_CLIENT_TTY"
     gui_pid="$CC_GUI_PID"; editor_app="$CC_EDITOR_APP"; shell_pids="$CC_SHELL_PIDS"
     target_wid=$(cc_wid_for_tty "$CC_CLIENT_TTY" "$CC_GUI_PID" "$CC_TERM")
+    rlog "  → local hub pane $pane, target=$tmux_target tty=$client_tty wid=${target_wid:-none}"
   else
+    # The pane exists but its client could not be resolved (cc_pane_route walks
+    # the tmux client's tty to a GUI pid, and that walk can fail while the window
+    # is very much on screen). Materializing here is the WORST answer: the hub
+    # window we just found is the thing the user is looking at. Focus it by the
+    # hub session's own title — the same mechanism that works for remote hubs.
+    if [ -n "$pane" ]; then
+      hub_local=$(tmux display-message -p -t "$pane" '#S' 2>/dev/null)
+      rlog "  cc_pane_route FAILED for $pane (hub '${hub_local:-?}') — trying its window by title"
+      if [ -n "$hub_local" ] && cc_focus_named_terminal "$hub_local"; then
+        tmux select-window -t "$pane" 2>/dev/null
+        tmux select-pane   -t "$pane" 2>/dev/null
+        rlog "  → focused local hub '$hub_local' on pane $pane"
+        echo "focused local hub '${hub_local}' on pane ${pane} (${remote_sess})"
+        exit 0
+      fi
+    fi
     # No hub pane — but a window may already be attached to this session from an
     # earlier click. Focus that before creating anything: a click should land on
     # the session, never pile a second window onto one already showing it.
     if cc_focus_named_terminal "$remote_sess"; then
+      rlog "  → focused a window titled '${remote_sess} · …'"
       echo "focused existing window showing ${remote_host}:${remote_sess}"
       exit 0
     fi
@@ -36,6 +60,7 @@ if [ -n "${remote_host:-}" ]; then
     # the local window is titled after the HUB session, not this one. Focus that
     # window and move the remote hub's active pane onto the session.
     hub=$(cc_remote_hub_pane "$remote_host" "$remote_sess")
+    rlog "  cc_remote_hub_pane=${hub:-none}"
     if [ -n "$hub" ]; then
       tab=$(printf '\t')
       hub_sess="${hub%%"$tab"*}"; hub_pane="${hub##*"$tab"}"
@@ -66,10 +91,12 @@ tell application "Ghostty"
   activate
 end tell
 OSA
+      rlog "  → NOTHING on screen was showing it; materialized a new window"
       echo "materialized remote session ${remote_host}:${remote_sess} in a new Ghostty window"
     else
       osascript -e "tell application \"Terminal\" to do script \"ssh -t ${remote_host} tmux attach -t ${remote_sess}\"" \
                 -e 'tell application "Terminal" to activate' >/dev/null 2>&1 || exit 1
+      rlog "  → NOTHING on screen was showing it; materialized a new window"
       echo "materialized remote session ${remote_host}:${remote_sess} in a new Terminal window"
     fi
     exit 0

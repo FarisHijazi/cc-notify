@@ -159,3 +159,34 @@ not-in-any-hub    → falls through and materializes (unchanged)
 
 window 11270 is `hub/service__eec13a · dema`. See @../../LESSONS.md #27 for the
 attached-hub preference and the `exit`-still-runs-`END` awk trap.
+
+## Addendum (2026-09-10 01:00) — two more reasons the click still materialized
+
+Reported again for the `site alarms` session (dema worktree
+`telemetry/worktrees/site-alarms`, tmux `hq-dema-gchat-do-n5zzefhakao-n5z-1`,
+route `1cd4c8ad-…`) with `tw dema.local:` running in a Ghostty window.
+`~/.claude/cc-notify.log` was the evidence — a wall of
+`materialized remote session dema:… in a new Ghostty window`.
+
+1. **`bin/cc-banner-click` ran cc-focus.sh from `1.7.17`.** Plain glob, ASCII
+   order, lowest version wins; that version has no remote handling at all, so
+   the hotkey path returned 1 and never dismissed the banner. Now `sort -V`.
+2. **`cc_pane_route` failure was read as "nothing is showing it".** Found pane
+   ≠ resolvable client. Now: focus the hub window by its title and `select-pane`
+   onto the tile.
+
+Also note the alias tier is doing real work here — `tw` stamps `@tw-src` as
+`dema.local` while the bridge stamps `remote_host=dema`; tier 2 (strip `.local`)
+is what connects them.
+
+Verified with PATH stubs for `osascript`/`aerospace` so nothing on screen moved
+(this is the right harness — earlier attempts patched the scripts themselves and
+kept introducing syntax errors into the copy):
+
+```text
+cc_hub_pane=%279 → local hub pane, target=hub/dema-local-service__f29e35:0.6   (normal)
+cc_pane_route FAILED for %279 → focused local hub window, select-pane %279     (new tier)
+cc_hub_pane=none, cc_remote_hub_pane=none → materialized                       (unchanged)
+```
+
+Ghostty window count unchanged across all three runs.
