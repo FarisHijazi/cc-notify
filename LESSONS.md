@@ -610,3 +610,21 @@ and a session `tw` genuinely doesn't watch still materializes as before.
   read-only.** Probing `cc_hub_add_pane` with a non-existent session created a
   real pane; it only vanished because the `ssh … attach` failed and the pane
   closed itself.
+
+## 30. Changing the active pane UNZOOMS the window — read the flag first
+
+A click that lands on a hub tile ran `select-pane`, and tmux drops a window's
+`prefix+z` zoom the moment the active pane changes. So a user watching one
+session maximized, who clicked a banner for another, got dumped into the tiled
+grid: they asked for a session and received the grid it lives in.
+
+`cc_select_keep_zoom` reads `#{window_zoomed_flag}` **before** selecting — after
+the select it is already 0, so there is nothing left to read — and re-zooms on
+the pane it just selected. It preserves, it does not invent: a window that was
+not zoomed is left tiled. Verified in an isolated session for all three cases
+(zoomed → follows the new pane, not zoomed → stays tiled, already zoomed on the
+target → unchanged), then end-to-end on a live hub with the state restored
+afterwards.
+
+The remote-hub tier needs the same dance done ON the far box, inside the single
+ssh command, for the same reason.

@@ -54,8 +54,7 @@ if [ -n "${remote_host:-}" ]; then
       hub_local=$(tmux display-message -p -t "$pane" '#S' 2>/dev/null)
       rlog "  cc_pane_route FAILED for $pane (hub '${hub_local:-?}') — trying its window by title"
       if [ -n "$hub_local" ] && cc_focus_named_terminal "$hub_local"; then
-        tmux select-window -t "$pane" 2>/dev/null
-        tmux select-pane   -t "$pane" 2>/dev/null
+        cc_select_keep_zoom "$pane"
         rlog "  → focused local hub '$hub_local' on pane $pane"
         echo "focused local hub '${hub_local}' on pane ${pane} (${remote_sess})"
         exit 0
@@ -79,7 +78,11 @@ if [ -n "${remote_host:-}" ]; then
       hub_sess="${hub%%"$tab"*}"; hub_pane="${hub##*"$tab"}"
       if cc_focus_named_terminal "$hub_sess"; then
         ssh -o BatchMode=yes -o ConnectTimeout=5 "$remote_host" \
-            "tmux select-window -t '$hub_pane' 2>/dev/null; tmux select-pane -t '$hub_pane' 2>/dev/null" \
+            "w=\$(tmux display-message -p -t '$hub_pane' '#{session_name}:#{window_index}' 2>/dev/null); \
+             z=\$(tmux display-message -p -t \"\$w\" '#{window_zoomed_flag}' 2>/dev/null); \
+             tmux select-window -t '$hub_pane' 2>/dev/null; \
+             tmux select-pane -t '$hub_pane' 2>/dev/null; \
+             [ \"\$z\" = 1 ] && tmux resize-pane -Z -t '$hub_pane' 2>/dev/null" \
             >/dev/null 2>&1 &
         echo "focused ${remote_host} hub '${hub_sess}' on pane ${hub_pane} (${remote_sess})"
         exit 0
@@ -150,8 +153,13 @@ tmux_jump() {
   if [ "$cur_ses" != "$tmux_session" ]; then
     tmux switch-client -c "$client_tty" -t "$tmux_session" 2>/dev/null
   fi
-  [ -n "$tmux_window" ] && tmux select-window -t "$tmux_session:$tmux_window" 2>/dev/null
-  [ -n "$tmux_pane" ]   && tmux select-pane   -t "$tmux_session:$tmux_window.$tmux_pane" 2>/dev/null
+  if [ -n "$tmux_window" ] && [ -n "$tmux_pane" ]; then
+    # Keeps a prefix+z zoom on the pane we land on instead of dropping the user
+    # back into the tiled grid — see cc_select_keep_zoom.
+    cc_select_keep_zoom "$tmux_session:$tmux_window.$tmux_pane"
+  else
+    [ -n "$tmux_window" ] && tmux select-window -t "$tmux_session:$tmux_window" 2>/dev/null
+  fi
 }
 
 # Ask the cc-notify-focus editor extension to reveal the exact integrated
