@@ -392,6 +392,29 @@ cc_remote_hub_pane() {
         END { if (!hit && best != "") print best }   # awk runs END after exit'
 }
 
+# Select a pane and put the window's zoom back on it.
+#
+# tmux UNZOOMS a window whenever the active pane changes, so a click that lands
+# on a tile in a hub the user had maximized with prefix+z dumped them back into
+# the tiled grid — they asked for the session, and got the grid it lives in.
+# Read the flag BEFORE selecting (it is gone afterwards) and re-zoom on the pane
+# we just selected. A window that was not zoomed is left alone.
+cc_select_keep_zoom() {
+  local target="$1" win zoomed
+  [ -n "$target" ] || return 0
+  command -v tmux >/dev/null 2>&1 || return 0
+  win=$(tmux display-message -p -t "$target" '#{session_name}:#{window_index}' 2>/dev/null) || return 0
+  [ -n "$win" ] || return 0
+  zoomed=$(tmux display-message -p -t "$win" '#{window_zoomed_flag}' 2>/dev/null)
+  tmux select-window -t "$win" 2>/dev/null
+  tmux select-pane -t "$target" 2>/dev/null
+  if [ "$zoomed" = 1 ] &&
+     [ "$(tmux display-message -p -t "$win" '#{window_zoomed_flag}' 2>/dev/null)" != 1 ]; then
+    tmux resize-pane -Z -t "$target" 2>/dev/null
+  fi
+  return 0
+}
+
 cc_focus_named_terminal() {
   local sess="$1" name="" wid=""
   [ -n "$sess" ] || return 1
