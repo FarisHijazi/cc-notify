@@ -392,26 +392,35 @@ cc_remote_hub_pane() {
         END { if (!hit && best != "") print best }   # awk runs END after exit'
 }
 
-# Select a pane and put the window's zoom back on it.
+# Select a pane and MAXIMIZE it (tmux zoom), so a click lands on the clicked
+# session filling the window rather than on one tile of a grid.
 #
-# tmux UNZOOMS a window whenever the active pane changes, so a click that lands
-# on a tile in a hub the user had maximized with prefix+z dumped them back into
-# the tiled grid — they asked for the session, and got the grid it lives in.
-# Read the flag BEFORE selecting (it is gone afterwards) and re-zoom on the pane
-# we just selected. A window that was not zoomed is left alone.
-cc_select_keep_zoom() {
-  local target="$1" win zoomed
+# Two tmux facts make this less obvious than it looks: changing the active pane
+# UNZOOMS the window, and `resize-pane -Z` TOGGLES. So "read the flag, select,
+# then toggle" un-maximizes exactly when the window was already zoomed on the
+# pane we want. Select first, then read the flag, then zoom only if it is off.
+#
+# Only windows with more than one pane are zoomed — a single-pane session (every
+# ordinary Claude session) has nothing to maximize, and setting the flag there
+# just leaves a stray Z in the status line.
+#
+# Off switch: CC_NO_FOCUS_ZOOM=1 / ~/.claude/notify.disable_focus_zoom — the
+# click then still selects the pane, it just leaves the layout alone.
+cc_select_and_zoom() {
+  local target="$1" win
   [ -n "$target" ] || return 0
   command -v tmux >/dev/null 2>&1 || return 0
   win=$(tmux display-message -p -t "$target" '#{session_name}:#{window_index}' 2>/dev/null) || return 0
   [ -n "$win" ] || return 0
-  zoomed=$(tmux display-message -p -t "$win" '#{window_zoomed_flag}' 2>/dev/null)
+
   tmux select-window -t "$win" 2>/dev/null
   tmux select-pane -t "$target" 2>/dev/null
-  if [ "$zoomed" = 1 ] &&
-     [ "$(tmux display-message -p -t "$win" '#{window_zoomed_flag}' 2>/dev/null)" != 1 ]; then
-    tmux resize-pane -Z -t "$target" 2>/dev/null
-  fi
+
+  [ "${CC_NO_FOCUS_ZOOM:-0}" = "1" ] && return 0
+  [ -f "$HOME/.claude/notify.disable_focus_zoom" ] && return 0
+  [ "$(tmux display-message -p -t "$win" '#{window_panes}' 2>/dev/null)" -gt 1 ] 2>/dev/null || return 0
+  [ "$(tmux display-message -p -t "$win" '#{window_zoomed_flag}' 2>/dev/null)" = "1" ] && return 0
+  tmux resize-pane -Z -t "$target" 2>/dev/null
   return 0
 }
 

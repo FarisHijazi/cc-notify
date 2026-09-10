@@ -611,20 +611,28 @@ and a session `tw` genuinely doesn't watch still materializes as before.
   real pane; it only vanished because the `ssh … attach` failed and the pane
   closed itself.
 
-## 30. Changing the active pane UNZOOMS the window — read the flag first
+## 30. A click maximizes the clicked session — and `resize-pane -Z` TOGGLES
 
-A click that lands on a hub tile ran `select-pane`, and tmux drops a window's
-`prefix+z` zoom the moment the active pane changes. So a user watching one
-session maximized, who clicked a banner for another, got dumped into the tiled
-grid: they asked for a session and received the grid it lives in.
+You clicked a notification for one session; landing you on one tile of the grid
+it happens to live in is not the answer. `cc_select_and_zoom` selects the pane
+and zooms it, so the session you asked for fills the window.
 
-`cc_select_keep_zoom` reads `#{window_zoomed_flag}` **before** selecting — after
-the select it is already 0, so there is nothing left to read — and re-zooms on
-the pane it just selected. It preserves, it does not invent: a window that was
-not zoomed is left tiled. Verified in an isolated session for all three cases
-(zoomed → follows the new pane, not zoomed → stays tiled, already zoomed on the
-target → unchanged), then end-to-end on a live hub with the state restored
-afterwards.
+Two tmux facts make the ordering matter:
 
-The remote-hub tier needs the same dance done ON the far box, inside the single
-ssh command, for the same reason.
+- **Changing the active pane unzooms the window.** So the zoom has to be applied
+  after the select, never before.
+- **`resize-pane -Z` toggles.** The tempting shape — read the flag, select, then
+  toggle — un-maximizes in exactly the case where the window was already zoomed
+  on the pane you want, i.e. clicking the same banner twice. Select first, then
+  read the flag, then zoom only when it is off.
+
+Only windows with `#{window_panes} > 1` are zoomed: an ordinary single-pane
+Claude session has nothing to maximize and setting the flag just leaves a stray
+`Z` in its status line. Off switch `CC_NO_FOCUS_ZOOM=1` /
+`~/.claude/notify.disable_focus_zoom` still selects the pane, it just leaves the
+layout alone. The remote-hub tier does the same dance on the far box, inside its
+single ssh command.
+
+Tested for all five shapes (tiled → maximizes; zoomed elsewhere → moves the
+maximize; already zoomed on the target → stays; off switch → selects only;
+single-pane → no flag), then end-to-end on a live hub with the state restored.
