@@ -25,6 +25,19 @@ rlog() { printf '[%s] %s\n' "$(date '+%F %T')" "$*" >>/tmp/cc-notify/focus-route
 if [ -n "${remote_host:-}" ]; then
   remote_sess="${remote_tmux%%:*}"
   pane=$(cc_hub_pane "$remote_host" "$remote_sess")
+  if [ -z "$pane" ]; then
+    # tw owns the hub grid and runs its own watcher, so a session that has just
+    # appeared gets its tile a beat later. A click landing in that gap used to
+    # open a whole new Ghostty window — and cc-notify adding the tile ITSELF
+    # just races the watcher and leaves two tiles for one session (measured).
+    # Wait the watcher out instead; only a session it never adds falls through.
+    for _ in 1 2 3 4 5 6; do
+      sleep 0.5
+      pane=$(cc_hub_pane "$remote_host" "$remote_sess")
+      [ -n "$pane" ] && break
+    done
+    [ -n "$pane" ] && rlog "${remote_host}:${remote_sess} — hub tile appeared while waiting"
+  fi
   rlog "${remote_host}:${remote_sess} — cc_hub_pane=${pane:-none}"
   if [ -n "$pane" ] && cc_pane_route "$pane"; then
     term="$CC_TERM"; tmux_target="$CC_TMUX_TARGET"; client_tty="$CC_CLIENT_TTY"

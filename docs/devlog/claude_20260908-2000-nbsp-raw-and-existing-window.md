@@ -190,3 +190,35 @@ cc_hub_pane=none, cc_remote_hub_pane=none → materialized                      
 ```
 
 Ghostty window count unchanged across all three runs.
+
+## Addendum (2026-09-10 14:40) — the gap was timing, and the obvious fix was wrong
+
+`focus-route.log` finally caught the failing click in the act:
+
+```text
+[14:33:29] dema:demaenergy_d-5 — cc_hub_pane=none
+[14:33:30]   cc_remote_hub_pane=hub/demaenergy-d__e3f05b	%533
+[14:33:31]   → NOTHING on screen was showing it; materialized a new window
+```
+
+Two minutes later the very same route resolved to `%285` in
+`hub/dema-local-service__f29e35`. The hub had been rebuilt (pane ids moved from
+%273-%280 to %281-%288) and the click landed in the gap.
+
+First attempt — `cc_hub_add_pane`, splitting the missing tile into the hub — was
+implemented, tested, and **removed**: `tw` re-adds tiles itself and the click
+races it, leaving two tiles for one session. Replaced with a ~3s re-poll of
+`cc_hub_pane`. See @../../LESSONS.md #29, including the `-F '#{pane_id}\t…'`
+trap that made the first version match nothing at all.
+
+Measured after the change, against the live hub:
+
+```text
+tile killed, tw re-adds it   → waited, landed on %295, ONE tile, no new window
+session gone from the box    → 4s, materialized, hub tile count unchanged (7→7)
+thmanyah (no window open)    → materialized (correct: nothing on screen shows it)
+```
+
+State of the boxes at the time: dema's hub covered all 7 live sessions, and
+every dema route that still materializes names a session that no longer exists
+(`demaenergy_d-3`, `control-service-5`, `service-1`, `hq-dema-gchat-*`).

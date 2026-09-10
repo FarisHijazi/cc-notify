@@ -584,3 +584,29 @@ Both were invisible after the fact, because nothing recorded which tier
 answered and the panes/clients/windows are gone by the time anyone asks.
 `/tmp/cc-notify/focus-route.log` now logs every tier of the remote branch,
 including the materialize as an explicit "NOTHING on screen was showing it".
+
+## 29. tw OWNS the hub grid — wait for its watcher, never add a tile yourself
+
+A click on a remote session whose hub tile did not exist opened a new Ghostty
+window. The obvious fix — have cc-focus.sh `split-window` the missing tile into
+the hub itself — is wrong, and measurably so: `tw` runs its own watcher and
+re-adds tiles for sessions it discovers, so the click races it and the hub ends
+up with **two tiles for one session**. Reproduced twice (panes %291/%292, then
+%293/%294) before the approach was abandoned.
+
+The right shape is to wait the owner out: on a miss, re-poll `cc_hub_pane` for
+~3s and only fall through when the tile never appears. Same window, one tile,
+and a session `tw` genuinely doesn't watch still materializes as before.
+
+**Two tmux traps found on the way:**
+
+- **tmux does NOT expand `\t` in a `-F` format.** `-F '#{pane_id}\t#{@tw-src}'`
+  emits the two characters, so `awk -F'\t'` then splits on the REAL tab stored
+  *inside* `@tw-src` and `$1` comes out as `%281\tdema.local`. `cc_hub_pane` has
+  always used a literal tab in the format; a copy of it that used `\t` silently
+  matched nothing. Byte-check with `od -c`, never by eye — the two look
+  identical in a terminal.
+- **A "read-only probe" that calls a function which splits a window is not
+  read-only.** Probing `cc_hub_add_pane` with a non-existent session created a
+  real pane; it only vanished because the `ssh … attach` failed and the pane
+  closed itself.
