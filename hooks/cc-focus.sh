@@ -20,7 +20,15 @@ route_file="/tmp/cc-notify/${session_id}.route"
 # Every tier is logged: "it opened a new window again" is otherwise unfalsifiable
 # after the fact — the panes, clients and windows it looked at are all gone by the
 # time anyone asks. /tmp/cc-notify/focus-route.log says which tier answered.
-rlog() { printf '[%s] %s\n' "$(date '+%F %T')" "$*" >>/tmp/cc-notify/focus-route.log 2>/dev/null; }
+# Every line carries elapsed-since-start, because "the click feels slow" is not
+# actionable and the tiers are all sub-second individually — only the gaps show
+# where the time actually goes. LC_ALL=C so EPOCHREALTIME uses a dot.
+_cc_t0="${EPOCHREALTIME:-0}"; _cc_t0="${_cc_t0/,/.}"
+rlog() {
+  local now="${EPOCHREALTIME:-0}"; now="${now/,/.}"
+  local el; el=$(LC_ALL=C awk -v a="$now" -v b="$_cc_t0" 'BEGIN{ printf "+%05.2fs", (a>0&&b>0)?a-b:0 }')
+  printf '[%s %s] %s\n' "$(date '+%F %T')" "$el" "$*" >>/tmp/cc-notify/focus-route.log 2>/dev/null
+}
 
 if [ -n "${remote_host:-}" ]; then
   remote_sess="${remote_tmux%%:*}"
@@ -31,12 +39,22 @@ if [ -n "${remote_host:-}" ]; then
     # open a whole new Ghostty window — and cc-notify adding the tile ITSELF
     # just races the watcher and leaves two tiles for one session (measured).
     # Wait the watcher out instead; only a session it never adds falls through.
-    for _ in 1 2 3 4 5 6; do
-      sleep 0.5
-      pane=$(cc_hub_pane "$remote_host" "$remote_sess")
-      [ -n "$pane" ] && break
-    done
-    [ -n "$pane" ] && rlog "${remote_host}:${remote_sess} — hub tile appeared while waiting"
+    #
+    # ...but ONLY when tw watches this host on this Mac at all. With the hub
+    # running ON the box (ssh + tw there), no local pane will EVER carry
+    # @tw-src for it, so this loop cannot succeed — it just burns its full 3s
+    # on every single click, which measured as ~70% of the click's latency for
+    # that topology. Ask first; the check is one tmux call.
+    if cc_host_watched_locally "$remote_host"; then
+      for _ in 1 2 3 4 5 6; do
+        sleep 0.5
+        pane=$(cc_hub_pane "$remote_host" "$remote_sess")
+        [ -n "$pane" ] && break
+      done
+      [ -n "$pane" ] && rlog "${remote_host}:${remote_sess} — hub tile appeared while waiting"
+    else
+      rlog "${remote_host}:${remote_sess} — tw does not watch this host locally; skipped the 3s watcher wait"
+    fi
   fi
   rlog "${remote_host}:${remote_sess} — cc_hub_pane=${pane:-none}"
   if [ -n "$pane" ] && cc_pane_route "$pane"; then
