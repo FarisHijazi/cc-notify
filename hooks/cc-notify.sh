@@ -42,6 +42,13 @@ session_title="$CC_TITLE"
 # cc-capture-window.sh + cc-color-apply.sh). Detached, write-only-if-changed.
 [ -n "$CC_COLOR_NAME" ] && ( cc_color_persist "${cwd:-$PWD}" "$CC_COLOR_NAME" </dev/null >/dev/null 2>&1 & )
 
+# Remote half: report this event for a Mac's bin/cc-remote-bridge to banner.
+# Deliberately ABOVE the SSH branch and not gated on $SSH_CONNECTION — a remote
+# session almost never has it, because the tmux server it runs under was started
+# by an earlier login and carries none of the current ssh env. Gated only by
+# notify.disable_remote_emit, which the collector Mac sets for itself.
+cc_remote_emit "$event_kind" "$input"
+
 # SSH branch: hook is running on a remote box. Bell + log, exit.
 if [ -n "$SSH_CONNECTION" ]; then
   printf '\a' >/dev/tty 2>/dev/null

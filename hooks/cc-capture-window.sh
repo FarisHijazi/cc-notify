@@ -74,6 +74,11 @@ case "$event" in
 esac
 [ -z "$status" ] && exit 0
 
+# Remote half: report this event so a Mac running bin/cc-remote-bridge can raise a
+# banner for this session. Detached and no-ops on the collector itself, so it costs
+# a local-only machine nothing. (Notification/Stop are emitted from cc-notify.sh.)
+cc_remote_emit "$(cc_remote_kind "$event" "$tool_name")" "$input"
+
 if [ "$full" = 1 ]; then
   # Capture the focused window id — but ONLY if it's a terminal/editor app, so a
   # session driving Chrome doesn't capture Chrome as the jump-back target.

@@ -274,6 +274,48 @@ cc_trigger_sweep() {
   [ -x "$sweep" ] && ( "$sweep" </dev/null >/dev/null 2>&1 & )
 }
 
+# Append one event line for the Mac's bridge to stream (the remote half).
+# Args: kind, raw hook payload.
+#
+# This is dispatched from the hooks the plugin ALREADY registers, rather than
+# from extra hooks.json entries, because the previous wiring — `bin/cc-install-
+# remote` scp'ing the script and merging hook entries into the remote's
+# ~/.claude/settings.json — is not durable. Anything that rewrites that file
+# drops the entries and the box goes silent with no error anywhere: found on all
+# three hosts at once (emit script gone, zero hook refs, events stopping dead on
+# the same day, `settings.json.cc-bak` still sitting there from the install).
+# The plugin, by contrast, is already installed and auto-updating on those boxes,
+# so wiring it here makes the remote half arrive and stay by itself. See
+# LESSONS #32.
+#
+# The collector opts out: cc-install-remote-agent drops notify.disable_remote_emit,
+# so the Mac running the bridge does not also emit to itself.
+cc_remote_emit() {
+  local kind="${1:-}" payload="${2:-}" emit
+  [ -n "$kind" ] || return 0
+  [ -f "$HOME/.claude/notify.disable_remote_emit" ] && return 0
+  emit="$(cd "$(dirname "${BASH_SOURCE[0]}")" 2>/dev/null && pwd)/cc-remote-emit.sh"
+  [ -f "$emit" ] || return 0
+  ( printf '%s' "$payload" | bash "$emit" "$kind" >/dev/null 2>&1 & )
+}
+
+# Claude Code hook event → the event kind cc-remote-emit.sh speaks, or empty for
+# events the stream deliberately ignores. PreToolUse/PostToolUse are carried ONLY
+# for AskUserQuestion: its menu fires no Notification, so 🔀 is the only signal
+# you would ever get, while a plain tool matcher would be pure traffic behind a
+# ⏳ that UserPromptSubmit already set. Args: hook_event_name, tool_name.
+cc_remote_kind() {
+  case "${1:-}" in
+    SessionStart)     printf 'start' ;;
+    UserPromptSubmit) printf 'prompt' ;;
+    PreCompact)       printf 'compact' ;;
+    SessionEnd)       printf 'end' ;;
+    PreToolUse)       [ "${2:-}" = "AskUserQuestion" ] && printf 'menu' ;;
+    PostToolUse)      [ "${2:-}" = "AskUserQuestion" ] && printf 'tool' ;;
+  esac
+  return 0
+}
+
 # ---------------------------------------------------------------------------
 # Presentation: facts → what the banner and the tab say.
 # ---------------------------------------------------------------------------
@@ -505,6 +547,23 @@ cc_pane_route() {
   [ -n "$CC_CLIENT_TTY" ]
 }
 
+# Session name of the tmux client attached to $1 (a tty path).
+#
+# Do NOT reach for `tmux display-message -c <tty> -p …` here. `-c` targets the
+# client for CLIENT formats only, and tmux resolves the format against the
+# CURRENT pane regardless — so from inside a hook (which always runs in some
+# pane) every lookup silently returns the CALLER's session, with rc=0 and no
+# error. Measured on tmux 3.5a: `-c` for three different clients returned the
+# caller's session all three times, and unsetting $TMUX did not help (it then
+# falls back to the most recently active client). `list-clients` is the only
+# version-proof way to ask "what is THAT client looking at". See LESSONS #31.
+cc_client_session() {
+  [ -n "${1:-}" ] || return 1
+  command -v tmux >/dev/null 2>&1 || return 1
+  tmux list-clients -F '#{client_tty}	#{client_session}' 2>/dev/null \
+    | awk -F'\t' -v t="$1" '$1==t { print $2; exit }'
+}
+
 # Exact Aerospace window id for a tty. Terminal.app and Ghostty run MANY windows
 # under ONE pid, so the pid→first-window lookup cc-focus.sh falls back to is a coin flip
 # (LESSONS #10) — locally that is covered by the window id captured at
@@ -538,7 +597,13 @@ end tell" 2>/dev/null)
   # becomes it), then take the window id from aerospace by that title so the
   # caller can switch workspace. With no match fall through to the pid lookup.
   if [ "$term" = "ghostty" ] && [ -n "$tty" ] && [ -z "$wid" ]; then
-    name=$(tmux display-message -c "$tty" -p '#{T:set-titles-string}' 2>/dev/null)
+    local csess
+    csess=$(cc_client_session "$tty")
+    # Expand the title against THAT client's session (`-t`), never against the
+    # caller's pane — see cc_client_session. Getting this wrong made every
+    # Ghostty lookup miss and fall through to the `--pid | head -1` coin flip
+    # this function exists to avoid.
+    [ -n "$csess" ] && name=$(tmux display-message -t "$csess:" -p '#{T:set-titles-string}' 2>/dev/null)
     if [ -n "$name" ]; then
       osascript >/dev/null 2>&1 <<OSA
 tell application "Ghostty"

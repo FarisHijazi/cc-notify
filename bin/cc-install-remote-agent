@@ -5,8 +5,15 @@
 #
 # The supervisor rediscovers hosts every 30s (from the tmux-watch hub panes plus
 # ~/.claude/notify.remote-hosts) and keeps one ssh streamer per host, reconnecting
-# on its own. The plist points at THIS dir's cc-remote-bridge, so re-run after a
-# plugin update to re-point it.
+# on its own.
+#
+# The plist RESOLVES the bridge at launch (dev repo, else newest cache) instead of
+# baking in this dir's path. Baking it in meant every plugin update silently killed
+# remote notifications: the cache keeps only recent versions, so once the installed
+# one was pruned launchd could not exec it — status 78, KeepAlive respawning into
+# the same missing file, an EMPTY remote-agent.log, and no banner from any remote
+# box until someone thought to re-run this script. Found in exactly that state,
+# pinned at 1.8.1 while the cache held 1.8.4/1.8.5. See LESSONS #32.
 #
 # Usage:  cc-install-remote-agent            # install + load
 #         cc-install-remote-agent --uninstall
@@ -30,6 +37,14 @@ fi
 [ -x "$bridge" ] || { echo "error: cc-remote-bridge not found/executable at $bridge" >&2; exit 1; }
 mkdir -p "$HOME/Library/LaunchAgents" /tmp/cc-notify
 
+# This machine COLLECTS, so it must not also EMIT. Every box with the plugin now
+# appends its own events (cc_remote_emit, dispatched from the hooks the plugin
+# already registers); installing the bridge here is the declaration that this one
+# is the hub, not a leaf. `rm` the sentinel if this Mac is itself watched by
+# another Mac.
+[ -e "$HOME/.claude/notify.disable_remote_emit" ] \
+  || { mkdir -p "$HOME/.claude" 2>/dev/null; : >"$HOME/.claude/notify.disable_remote_emit"; }
+
 # PATH matters: the supervisor shells out to ssh and tmux, and launchd's default
 # PATH omits /opt/homebrew/bin (where tmux and alerter live on Apple Silicon).
 cat > "$plist" <<PLIST
@@ -38,7 +53,12 @@ cat > "$plist" <<PLIST
 <plist version="1.0">
 <dict>
   <key>Label</key>            <string>$LABEL</string>
-  <key>ProgramArguments</key> <array><string>$bridge</string></array>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/bin/bash</string>
+    <string>-c</string>
+    <string>for p in "\$HOME"/Projects/cc-notify/bin/cc-remote-bridge \$(ls -d "\$HOME"/.claude/plugins/cache/*/cc-notify/*/bin/cc-remote-bridge 2>/dev/null | sort -Vr); do [ -x "\$p" ] &amp;&amp; exec "\$p"; done; echo "cc-notify: no cc-remote-bridge found (dev repo or plugin cache)" >&amp;2; exit 1</string>
+  </array>
   <key>KeepAlive</key>        <true/>
   <key>RunAtLoad</key>        <true/>
   <key>ProcessType</key>      <string>Background</string>
@@ -51,7 +71,7 @@ PLIST
 
 unload
 if launchctl bootstrap "$domain" "$plist" 2>/dev/null || launchctl load "$plist" 2>/dev/null; then
-  echo "installed $LABEL → $bridge"
+  echo "installed $LABEL (resolves the bridge at launch; survives plugin updates)"
   echo "  hosts: $("$bridge" --hosts | tr '\n' ' ')"
   echo "  log:   /tmp/cc-notify/remote-bridge.log"
 else

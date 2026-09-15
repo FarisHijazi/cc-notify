@@ -120,6 +120,45 @@ OSA
   fi
 fi
 
+# A LOCAL session can be on screen exactly the same way a remote one is: not in
+# a window of its own, but as one TILE of a tmux-watch hub. `tcc` sessions are
+# always like this — the only client attached to `farishijazi-3` is tw's monitor
+# client, which belongs to no GUI window at all, while the thing you actually
+# look at is a pane of `hub/farishijazi__…` in a Ghostty window.
+#
+# The captured route cannot express that. `cc_detect_terminal` walks the monitor
+# client's tty up through whichever hub pane happens to host it, so client_tty
+# lands on A hub's client and target_wid on whichever hub window was focused when
+# the hook fired — independently. Measured: one `farishijazi-3` route paired
+# client_tty=/dev/ttys001 (hub B) with target_wid=60 (hub A), and two routes for
+# `farishijazi-6` captured minutes apart had the pairing swapped. So the click
+# focused one window and switched the other's tmux client, and the tile for the
+# session it was about was never selected.
+#
+# Re-resolve from the stable key instead, exactly as the remote branch does:
+# tw stamps `@tw-src = "<host>\t<session>"` on every tile, with an EMPTY host
+# field for a local session. That is already a unique address — which is why the
+# session NAMES need no hashes or ids; nothing was ever ambiguous about them, the
+# local path simply never looked at this key.
+if [ -z "${remote_host:-}" ] && [ -n "${tmux_target:-}" ]; then
+  local_sess="${tmux_target%%:*}"
+  local_pane=$(cc_hub_pane "" "$local_sess")
+  if [ -n "$local_pane" ] && cc_pane_route "$local_pane"; then
+    term="$CC_TERM"; tmux_target="$CC_TMUX_TARGET"; client_tty="$CC_CLIENT_TTY"
+    gui_pid="$CC_GUI_PID"; editor_app="$CC_EDITOR_APP"; shell_pids="$CC_SHELL_PIDS"
+    # The hub's window, resolved from the hub client's OWN title — not the wid
+    # captured at SessionStart, which is the cross-wired one.
+    hub_wid=$(cc_wid_for_tty "$CC_CLIENT_TTY" "$CC_GUI_PID" "$CC_TERM")
+    [ -n "$hub_wid" ] && target_wid="$hub_wid"
+    # Select + MAXIMIZE this tile, not the session's own single pane (which is
+    # already "selected" within itself and so a no-op).
+    focus_pane="$local_pane"
+    rlog "local ${local_sess} — hub pane ${local_pane} target=${tmux_target} tty=${client_tty} wid=${target_wid:-none}"
+  else
+    rlog "local ${local_sess} — no hub tile (pane='${local_pane:-none}'), using captured route"
+  fi
+fi
+
 # Focus via Aerospace. Prefer the explicitly-captured target_wid (captured at
 # SessionStart/UserPromptSubmit when the user was reliably looking at the
 # right window). Fall back to gui_pid-based lookup if no captured wid.
@@ -150,11 +189,20 @@ tmux_jump() {
   [ -n "$tmux_session" ] || return 0
   [ -n "$client_tty" ]  || return 0
   local cur_ses
-  cur_ses=$(tmux display-message -c "$client_tty" -p '#S' 2>/dev/null)
+  # `cc_client_session`, NOT `display-message -c` — the latter answers with the
+  # CALLER's session (see cc-lib.sh). That made cur_ses == tmux_session almost
+  # always, so this switch-client was skipped and the window kept showing
+  # whatever it was on. `switch-client -c` itself is fine: it targets a client
+  # directly rather than expanding a format.
+  cur_ses=$(cc_client_session "$client_tty")
   if [ "$cur_ses" != "$tmux_session" ]; then
     tmux switch-client -c "$client_tty" -t "$tmux_session" 2>/dev/null
   fi
-  if [ -n "$tmux_window" ] && [ -n "$tmux_pane" ]; then
+  # A resolved hub tile is the thing to land on; `$tmux_target`'s own pane is a
+  # no-op for a single-pane session.
+  if [ -n "${focus_pane:-}" ]; then
+    cc_select_and_zoom "$focus_pane"
+  elif [ -n "$tmux_window" ] && [ -n "$tmux_pane" ]; then
     # Lands MAXIMIZED on the clicked session rather than on one tile of the
     # hub's grid — see cc_select_and_zoom.
     cc_select_and_zoom "$tmux_session:$tmux_window.$tmux_pane"
