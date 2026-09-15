@@ -103,14 +103,14 @@ sound="$CC_SOUND"; title="$CC_BANNER_TITLE"; notif_tab_only="$CC_TAB_ONLY"
 # the tab gets stuck (e.g. frozen on ⏳). File-based (the extension watches it);
 # NO `open` (which would steal Aerospace focus).
 #
-# Two-tier so ⏳ can NEVER stick: the full write (cc_write_tab) refreshes color+title
-# but is gated on positively detecting the editor (term=vscode) — which is FLAKY
-# under tmux. If detection failed this invocation, fall back to the cheap
-# cc_set_status, which just swaps the leading status emoji on the EXISTING .tab with
-# NO term/pid dependency. The mid-turn ⏳ comes from that same cheap path (no gate),
-# so the outcome/done emoji must be writable the same way — else a flaked detection
-# on Stop leaves the tab frozen on ⏳ (the exact bug this fixes).
-if [ "$term" = "vscode" ] && [ -n "$shell_pids_all" ]; then
+# Written UNCONDITIONALLY — the `term = vscode` gate is gone (see the matching
+# note in cc-capture-window.sh). It gated the full write on a detection that is
+# FLAKY under tmux, which is what let a flaked Stop leave the tab frozen on the
+# mid-turn ⏳ written by the ungated cheap path. Rather than keep a two-tier
+# arrangement whose tiers disagree (LESSONS #18), both writers now just write:
+# the .tab is only ever acted on by a terminal whose pid is in its pid set, so
+# writing one for a non-editor session is inert.
+if [ -n "$shell_pids_all" ]; then
   ( cc_write_tab "${session_id:-default}" "$shell_pids_all" "$title" </dev/null >/dev/null 2>&1 & )
 else
   ( cc_set_status "${session_id:-default}" "$status_emoji" </dev/null >/dev/null 2>&1 & )

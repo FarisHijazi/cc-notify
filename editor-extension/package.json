@@ -16,5 +16,8 @@
     "onStartupFinished"
   ],
   "main": "./extension.js",
+  "extensionKind": [
+    "ui"
+  ],
   "contributes": {}
 }
