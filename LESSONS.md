@@ -598,6 +598,22 @@ The right shape is to wait the owner out: on a miss, re-poll `cc_hub_pane` for
 ~3s and only fall through when the tile never appears. Same window, one tile,
 and a session `tw` genuinely doesn't watch still materializes as before.
 
+**The wait must be conditional on the wait being possible (v1.8.8).** That poll
+is 6 x 0.5s, and it ran on EVERY remote click that missed — including the
+topology where the hub runs ON the remote box, where no local pane will ever
+carry `@tw-src` and the loop therefore *cannot* succeed. Measured: 4.3s per
+click, of which 3.0s was this loop waiting for something impossible; skipping it
+when no local pane watches that host at all (`cc_host_watched_locally`) took the
+same click to **0.52s**. The `tw` case still gets its full wait, because there
+the tile genuinely can appear.
+
+*Rule: a retry loop needs a precondition, not just a timeout. "Wait in case it
+shows up" is only correct where it CAN show up; everywhere else it is a fixed
+tax paid forever, and it hides as "feels slow" rather than as a bug.* The same
+click is now logged with elapsed-since-start on every line
+(`/tmp/cc-notify/focus-route.log`), because every individual tier here is
+sub-second — only the gaps between them show where time actually goes.
+
 **Two tmux traps found on the way:**
 
 - **tmux does NOT expand `\t` in a `-F` format.** `-F '#{pane_id}\t#{@tw-src}'`

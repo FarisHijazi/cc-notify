@@ -420,6 +420,26 @@ cc_hub_pane() {
 # Used before materializing a new window: a previous click (or the user) may
 # already have one open, and stacking another on top of it is the one thing a
 # click should never do. Returns 0 only when something was really focused.
+# Is tw watching $1 on THIS Mac at all — i.e. does any local pane carry an
+# @tw-src tile for that host (any session)? Distinct from cc_hub_pane, which asks
+# about one specific session.
+#
+# Exists to answer "could a tile for this host ever appear here". When tw runs ON
+# the remote box instead (ssh + tw there), nothing local ever carries @tw-src for
+# it, so cc-focus.sh's "wait for the watcher to add the tile" poll can only ever
+# burn its full timeout — on every single click, for the whole life of that
+# topology. Same host normalisation as cc_hub_pane tier 2.
+cc_host_watched_locally() {
+  local host="$1" panes
+  [ -n "$host" ] || return 1
+  command -v tmux >/dev/null 2>&1 || return 1
+  panes=$(tmux list-panes -a -F '#{@tw-src}' 2>/dev/null) || return 1
+  printf '%s\n' "$panes" | awk -F'\t' -v h="$host" '
+    function key(x) { sub(/^[^@]*@/, "", x); sub(/:.*$/, "", x); x = tolower(x); sub(/\.local$/, "", x); return x }
+    $1 != "" && key($1) == key(h) { found = 1; exit }
+    END { exit(found ? 0 : 1) }'
+}
+
 # Find the tmux-watch hub ON THE REMOTE BOX that is displaying <host>:<sess>.
 #
 # There are two watch topologies and cc_hub_pane only sees one of them. When the
