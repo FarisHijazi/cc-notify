@@ -167,20 +167,33 @@ let d="";process.stdin.on("data",c=>d+=c).on("end",()=>{
 # rotating its event file is handled for free.
 # ---------------------------------------------------------------------------
 _stream() {
-  local host="$1" line
+  local host="$1" line dial n=0
   trap 'for c in $(pgrep -P $$ 2>/dev/null); do _kill_tree "$c"; done; exit 0' TERM INT
-  _log "stream $host: start"
+  # The same box answers to several ssh aliases and tmux-watch stamped exactly
+  # one of them into @tw-src. Take this Mac off the home LAN and that alias is
+  # dead (`thmanyah.local` -> "Host is down") while its sibling is fine
+  # (`thmanyah` over the tailnet) — and the stream then retries the corpse every
+  # 10s forever, so NO notifications arrive from that box at all. Measured: 112
+  # consecutive failures while the machine was reachable the whole time.
+  # So alternate across the host's equivalence class (cc_host_key — the same one
+  # cc_hub_pane tier 2 uses) until one connects. The alias we DIAL is a transport
+  # detail; $host stays the identity stamped on every event, so click routing is
+  # untouched (LESSONS #22).
+  local -a dials=("$host")
+  [ "$(cc_host_key "$host")" != "$host" ] && dials+=("$(cc_host_key "$host")")
+  _log "stream $host: start (dial order: ${dials[*]})"
   while ! _off; do
+    dial="${dials[$(( n % ${#dials[@]} ))]}"; n=$(( n + 1 ))
     ssh -o BatchMode=yes -o ConnectTimeout=10 \
         -o ServerAliveInterval=20 -o ServerAliveCountMax=3 \
-        "$host" "f=\$HOME/.claude/cc-events.jsonl; mkdir -p \$HOME/.claude; : >>\"\$f\";
+        "$dial" "f=\$HOME/.claude/cc-events.jsonl; mkdir -p \$HOME/.claude; : >>\"\$f\";
                  awk -v t=\$(( \$(date +%s) - $REPLAY )) -F'\"ts\":' 'NF>1{split(\$2,a,\",\"); if (a[1]+0>=t) print}' \"\$f\";
                  exec tail -n 0 -F \"\$f\" 2>/dev/null" 2>>"$log" \
     | while IFS= read -r line; do
         [ -n "$line" ] && _handle "$host" "$line"
       done
     _off && break
-    _log "stream $host: disconnected, retrying in ${RETRY}s"
+    _log "stream $host: disconnected via '$dial', retrying in ${RETRY}s"
     sleep "$RETRY"
   done
   _log "stream $host: stop"

@@ -861,3 +861,49 @@ sleep.
 *Rule: a path a human waits on logs its own total, at every exit, next to the
 per-tier detail. Not a debug flag — always on. The alternative is a bug report
 you cannot reproduce and three fixes you cannot rank.*
+
+## 36. One box, several ssh aliases — and pinning to one of them is a single point of failure
+
+The real answer to "why did that click take 14 seconds", found only after the
+timers from #35 were in and a user asked the right question: *are you seriously
+opening a new ssh connection for this?*
+
+**The facts, measured.** `thmanyah.local` (LAN, 192.168.0.43) and `thmanyah`
+(tailnet) are the same machine. tmux-watch stamps exactly one of them into
+`@tw-src`, and that alias then flows into every route file and every click. Take
+the Mac off the home LAN and the stamped alias is a corpse while its sibling is
+fine — and a live multiplexed connection to that box was sitting open in
+`~/.ssh/sockets` the whole time. Two consequences, both invisible:
+
+- **The click** dials the dead alias: `ConnectTimeout=5` if the address is
+  routable-but-silent ("Operation timed out"), then a `cc_focus_named_terminal`
+  attempt, then it *materializes a Ghostty window* running
+  `ssh -t <dead host> tmux attach` — which sits there timing out in front of the
+  user. That is the 14 seconds, and almost none of it is computation.
+- **The bridge** retries the corpse every 10s forever: **112 consecutive
+  failures** in the log while the box was reachable the entire time. No
+  notifications arrive from that machine at all — a far bigger bug than latency,
+  and it announces itself only as "huh, that box has been quiet today".
+
+**Three rules came out of it.**
+
+1. **Ask before you dial.** `ssh -O check <host>` is a poke at a local unix
+   socket — no network, ~10ms — and it answers "is there already a connection to
+   this box?". A click should be a new *channel* on the bridge's existing stream
+   (0.03-0.28s), never a handshake (0.21s+), never a timeout (5s).
+2. **Prefer the alias that is actually connected.** Not a guess: it is the same
+   equivalence class the code already treats as one box (strip `user@`, `:port`,
+   lowercase, strip `.local`), and a live master proves that alias is both
+   reachable and authenticated. Identity is untouched — events stay stamped with
+   the alias tmux-watch chose, only the transport moves — so routing cannot drift
+   (#22). The bridge alternates across the class on retry instead of hammering
+   one corpse.
+3. **Never materialize a window onto a host you could not reach.** An empty
+   window that dies is strictly worse than an honest message, and the user
+   should not pay an ssh timeout to discover it. 5s+dead window -> 2.2s and a
+   sentence.
+
+*Rule: a long-lived connection already open to the thing you are about to talk
+to is infrastructure — find it and use it. And when an identifier can name the
+same resource by several routes, "the one that was written down" and "the one
+that works" are different questions; ask the second one at the moment of use.*

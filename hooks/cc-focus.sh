@@ -104,7 +104,7 @@ if [ -n "${remote_host:-}" ]; then
       # one, which in this topology is always.
       if cc_focus_named_terminal "$hub_sess" || cc_focus_editor_window "$remote_host" "" >/dev/null; then
         rlog "  → focused window for hub '$hub_sess' (pane $hub_pane)"
-        ssh -o BatchMode=yes -o ConnectTimeout=5 "$remote_host" \
+        cc_ssh "$remote_host" \
             "tmux select-window -t '$hub_pane' 2>/dev/null; \
              tmux select-pane -t '$hub_pane' 2>/dev/null; \
              w=\$(tmux display-message -p -t '$hub_pane' '#{session_name}:#{window_index}' 2>/dev/null); \
@@ -117,8 +117,20 @@ if [ -n "${remote_host:-}" ]; then
       fi
     fi
     # Nothing on this Mac is showing it — materialize the view. A click is an
-    # explicit user action, so opening a window is what they asked for. The
-    # session name comes from another machine: only ever pass a plain tmux name.
+    # explicit user action, so opening a window is what they asked for.
+    #
+    # ...unless the box is unreachable. `cc_ssh_alias` already told us whether
+    # ANY alias for it has a live connection; if none does, the window we are
+    # about to open would run `ssh -t <dead host> tmux attach` and sit there
+    # timing out. An empty window that dies is worse than an honest message, and
+    # a click that lands on nothing must not also cost the user a full ssh
+    # timeout to find that out.
+    if ! remote_alias=$(cc_ssh_alias "$remote_host"); then
+      rlog "  → ${remote_host} is unreachable (no live connection on any alias) — not opening a window onto it"
+      echo "cannot reach ${remote_host}: nothing on screen is showing ${remote_sess}, and a new window would only time out"
+      exit 1
+    fi
+    # The session name comes from another machine: only ever pass a plain tmux name.
     case "$remote_sess" in
       ""|*[!A-Za-z0-9._-]*) echo "remote session name not addressable: '$remote_sess'"; exit 1 ;;
     esac
@@ -130,7 +142,7 @@ if [ -n "${remote_host:-}" ]; then
       osascript >/dev/null 2>&1 <<OSA || exit 1
 tell application "Ghostty"
   set cfg to new surface configuration
-  set command of cfg to "ssh -t ${remote_host} tmux attach -t ${remote_sess}"
+  set command of cfg to "ssh -t ${remote_alias} tmux attach -t ${remote_sess}"
   new window with configuration cfg
   activate
 end tell
@@ -138,7 +150,7 @@ OSA
       rlog "  → NOTHING on screen was showing it; materialized a new window"
       echo "materialized remote session ${remote_host}:${remote_sess} in a new Ghostty window"
     else
-      osascript -e "tell application \"Terminal\" to do script \"ssh -t ${remote_host} tmux attach -t ${remote_sess}\"" \
+      osascript -e "tell application \"Terminal\" to do script \"ssh -t ${remote_alias} tmux attach -t ${remote_sess}\"" \
                 -e 'tell application "Terminal" to activate' >/dev/null 2>&1 || exit 1
       rlog "  → NOTHING on screen was showing it; materialized a new window"
       echo "materialized remote session ${remote_host}:${remote_sess} in a new Terminal window"

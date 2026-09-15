@@ -312,6 +312,19 @@ bin/cc-notify-doctor            # section 7 shows streamers, hub panes, statuses
 tail -f /tmp/cc-notify/remote-bridge.log
 ```
 
+**One box, several aliases.** `dema`, `faris@dema-dev:~` and `dema.local` are
+treated as one machine throughout, and that matters for more than matching: the
+alias tmux-watch stamped into `@tw-src` can be the one that is *down* (a LAN
+address while you are away from that LAN) while a sibling alias is up and already
+connected. So both the bridge and the click ask which alias has a live ssh
+`ControlMaster` right now (`ssh -O check` — a local socket poke, no network) and
+use that one; the bridge alternates across the aliases on retry rather than
+hammering a dead one, and a click rides the bridge's existing connection instead
+of opening its own. The alias is transport only — events stay stamped with the
+alias you configured, so click routing never changes. A host nothing can reach
+gets a bounded wait (`CC_SSH_TIMEOUT`, 2s) and an honest message rather than a new
+window that would only time out.
+
 Hosts are **discovered**, not configured: any host with a tmux-watch pane on
 this Mac is bridged. Pin extra ones (or hosts you have no hub for) in
 `~/.claude/notify.remote-hosts`, one per line.

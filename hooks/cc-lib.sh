@@ -440,6 +440,82 @@ cc_host_watched_locally() {
     END { exit(found ? 0 : 1) }'
 }
 
+# ---------------------------------------------------------------------------
+# One door to a remote box.
+#
+# Three separate things used to open their own ssh to a host, and every one of
+# them paid a full TCP+auth handshake on a click a human was waiting through —
+# while a healthy multiplexed connection to that same box sat open in
+# ~/.ssh/sockets. `ssh -O check` is a poke at a LOCAL unix socket (no network,
+# ~5ms), so asking "is there already a connection?" is free.
+#
+# Two rules fall out, and both are about the click never being the slow part:
+#
+#   1. RIDE the live connection. bin/cc-remote-bridge holds a long-lived
+#      `ssh <host> tail -F` per host and ~/.ssh/config sets `ControlMaster auto`,
+#      so a click's command should be a new CHANNEL on that stream (measured
+#      0.03s), not a handshake (0.21-0.27s), let alone a timeout.
+#   2. When there is no connection, do NOT wait the default 5s. A host with no
+#      master is usually a host nothing can reach — the bridge is in its retry
+#      loop — and the click's ssh is the one thing standing between a keypress
+#      and the local fallback tiers. Hard cap, CC_SSH_TIMEOUT (2s).
+#
+# The alias hop is the part that is not obvious. The same box is reachable under
+# several ssh aliases (`thmanyah` over the tailnet, `thmanyah.local` on the LAN)
+# and everything downstream is keyed on the ONE alias tmux-watch stamped into
+# @tw-src. Take that Mac off the home LAN and that alias is dead while the other
+# is live and already connected — measured: `thmanyah.local` -> "Host is down",
+# `thmanyah` -> a running master, same machine. So when the stamped alias has no
+# master, prefer a sibling alias that HAS one. "Sibling" is not a guess: it is
+# the same equivalence class cc_hub_pane tier 2, cc_focus_editor_window and the
+# README already treat as one box (`dema`, `faris@dema-dev:~` and `dema.local`).
+# Identity is untouched — events stay stamped with the original alias, only the
+# transport changes — so routing cannot drift (LESSONS #22).
+# ---------------------------------------------------------------------------
+
+# The host equivalence class, as a shell function: strip user@, strip :port,
+# lowercase, strip .local. Same rule as the awk `key()` inlined in cc_hub_pane,
+# cc_host_watched_locally and cc_focus_editor_window.
+cc_host_key() {
+  local h="${1#*@}"
+  h="${h%%:*}"
+  h=$(printf '%s' "$h" | tr '[:upper:]' '[:lower:]')
+  printf '%s' "${h%.local}"
+}
+
+# Which alias for this box has a live multiplexed connection right now?
+# Echoes the stamped alias unchanged when it has one (the normal case), or when
+# no sibling does either — callers must stay correct on a genuinely dead host.
+cc_ssh_alias() {
+  local host="$1" alt
+  [ -n "$host" ] || return 1
+  ssh -O check "$host" >/dev/null 2>&1 && { printf '%s' "$host"; return 0; }
+  # Only ever ONE alternate, only when it is already connected AND authenticated
+  # (which is what a live master proves), and only within the equivalence class.
+  alt=$(cc_host_key "$host")
+  if [ "$alt" != "$host" ] && ssh -O check "$alt" >/dev/null 2>&1; then
+    printf '%s' "$alt"; return 0
+  fi
+  # Nothing in the class is connected. Echo the stamped alias anyway — a caller
+  # must still be able to try — but say so in the status, which is also how
+  # cc_ssh knows to cap the wait.
+  printf '%s' "$host"
+  return 1
+}
+
+# Run a command on a remote box. Rides an existing connection when there is one.
+# Returns the remote command's status; 255 is ssh's own "could not connect".
+cc_ssh() {
+  local host="$1"; shift
+  local alias rc
+  alias=$(cc_ssh_alias "$host"); rc=$?
+  if [ "$rc" -eq 0 ]; then
+    ssh -o BatchMode=yes "$alias" "$@"
+  else
+    ssh -o BatchMode=yes -o ConnectTimeout="${CC_SSH_TIMEOUT:-2}" "$alias" "$@"
+  fi
+}
+
 # Find the tmux-watch hub ON THE REMOTE BOX that is displaying <host>:<sess>.
 #
 # There are two watch topologies and cc_hub_pane only sees one of them. When the
@@ -456,7 +532,7 @@ cc_remote_hub_pane() {
   local host="$1" sess="$2"
   [ -n "$host" ] && [ -n "$sess" ] || return 0
   case "$sess" in *[!A-Za-z0-9._-]*) return 0 ;; esac
-  ssh -o BatchMode=yes -o ConnectTimeout=5 "$host" \
+  cc_ssh "$host" \
       "tmux list-panes -a -F '#{session_attached}|#{session_name}|#{pane_id}|#{@tw-src}' 2>/dev/null" 2>/dev/null \
     | awk -F'|' -v s="$sess" '
         {
