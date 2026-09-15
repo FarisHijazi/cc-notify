@@ -825,3 +825,39 @@ Two supporting traps found alongside:
   the switch runs against whatever claimed that tty since. Return early on an
   empty answer — same "when unsure, answer nothing" discipline that stopped
   `cc_detect_terminal` adopting another session's client.
+
+## 35. "It feels slow" is unfalsifiable until the path times ITSELF end to end
+
+A user reported ~14s to focus a remote session from a Cursor window. Every tier
+inside `cc-focus.sh` is individually sub-second, so there was nothing to look at:
+the panes, clients and windows it examined are gone by the time anyone asks, and
+a stopwatch on the *whole* click cannot say which half was slow. Three things
+came out of instrumenting it rather than theorising:
+
+**(a) The first fix was real and found by arithmetic, not intuition.** Stamping
+every `focus-route.log` line with elapsed-since-start showed a 3.0s gap before
+the first tier — a retry loop waiting for something that could never happen in
+that topology (#29's watcher poll, in the hub-on-the-remote-box case). 4.3s ->
+0.52s. The gap was invisible while the log carried only wall-clock seconds,
+because a 3s gap between two lines reads exactly like a slow line.
+
+**(b) Three plausible culprits were all wrong, and only measurement said so.**
+ssh looked like the obvious cost — it is 0.03s warm under `ControlMaster`, 0.25s
+cold. The "materialize a new Ghostty window" branch (the pre-fix behaviour, and
+the only branch that *could* be slow) looked like the answer — measured
+osascript 0.31s, window on screen 0.49s, tmux client attached 0.64s. Neither is
+seconds. Guessing would have "fixed" the wrong thing twice and then declared
+victory, because the fix that *did* land would have masked it.
+
+**(c) A scan whose per-item probe spawns a process needs a bound, and the bound
+should come from the data's own lifetime.** The hotkey wrapper ran one `pgrep`
+per `.route` file looking for the live banner: 50 routes = 1.7s before
+`cc-focus.sh` even started. Routes are written at banner-post time and a banner
+outlives its post by at most `CC_BANNER_TIMEOUT`, so with `ls -t` (newest first)
+the scan can simply **stop** at the first route older than that — an ordering
+the data already had. 1.73s -> 0.22s, of which 0.15s is the deliberate settle
+sleep.
+
+*Rule: a path a human waits on logs its own total, at every exit, next to the
+per-tier detail. Not a debug flag — always on. The alternative is a bug report
+you cannot reproduce and three fixes you cannot rank.*

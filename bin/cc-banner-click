@@ -30,8 +30,20 @@ sleep 0.15
 # Find the most recent route file whose alerter is STILL running — i.e., a
 # banner that's currently displayed. Skip stale routes for banners that
 # already timed out or were dismissed.
+#
+# `ls -t` is newest-first, and cc-notify.sh (re)writes a route the moment it
+# posts that session's banner — so a route older than the banner's own lifetime
+# CANNOT have a live alerter. Stop scanning there instead of pgrep'ing every
+# route ever written: measured 50 routes = 50 pgreps = 1.7s of pure latency
+# before cc-focus.sh even started, on every press that found no live banner.
+# 5min of slack covers both a banner posted just before the cutoff and a bigger
+# CC_BANNER_TIMEOUT set in a session but not in the hotkey wrapper's own env.
+cutoff=$(( ${CC_BANNER_TIMEOUT:-120} + 300 ))
+now_s=$(date +%s)
 session_id=""
 for route in $(ls -t /tmp/cc-notify/*.route 2>/dev/null); do
+  mtime=$(stat -f %m "$route" 2>/dev/null || stat -c %Y "$route" 2>/dev/null) || continue
+  [ $(( now_s - mtime )) -gt "$cutoff" ] && break
   candidate_sid=$(basename "$route" .route)
   if pgrep -f "alerter.*cc-$candidate_sid" >/dev/null 2>&1; then
     session_id="$candidate_sid"
@@ -39,9 +51,22 @@ for route in $(ls -t /tmp/cc-notify/*.route 2>/dev/null); do
   fi
 done
 
+# End-to-end latency of the hotkey path, into the same log cc-focus.sh writes its
+# tiers to. Each tier is sub-second on its own, so a press that felt slow is only
+# diagnosable when the total sits next to them. Measured from BEFORE the settle
+# sleep, because that is latency the user feels too.
+elapsed_log() {
+  local end_ms; end_ms=$(($(date +%s%N) / 1000000))
+  LC_ALL=C awk -v ms="$(( end_ms - now_ms ))" -v what="$1" \
+               -v ts="$(date '+%F %T')" \
+    'BEGIN{ printf "[%s +%05.2fs] HOTKEY end-to-end: %s\n", ts, ms/1000, what }' \
+    >>/tmp/cc-notify/focus-route.log 2>/dev/null
+}
+
 if [ -z "$session_id" ]; then
   # No live banner — hotkey is a no-op.
   printf '[%s] HOTKEY no-op (no live banner)\n' "$(date +%T)" >> /tmp/cc-notify.gate.log
+  elapsed_log "no-op (no live banner)"
   exit 2
 fi
 
@@ -91,5 +116,7 @@ if [ "$focus_rc" = "0" ]; then
   [ -x "$alerter_bin" ] && "$alerter_bin" --remove "cc-$session_id" >/dev/null 2>&1
   ( sleep 0.3; pkill -f "alerter.*cc-$session_id" 2>/dev/null ) &
 fi
+
+elapsed_log "scan+focus (sid=$session_id rc=$focus_rc)"
 
 exit "$focus_rc"
