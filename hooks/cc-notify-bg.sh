@@ -83,6 +83,17 @@ result=$("$alerter_bin" \
 
 case "$result" in
   *CONTENTCLICKED*|*contentClicked*|*ACTIONCLICKED*|*actionClicked*)
+    # Time the click→focus leg into the same log cc-focus.sh writes its tiers to.
+    # Every tier inside it is sub-second on its own, so "the click felt slow" is
+    # only diagnosable when the TOTAL is recorded right next to them — and this
+    # is the only place that can measure the banner path (the hotkey path has its
+    # own timer in bin/cc-banner-click).
+    _t0="${EPOCHREALTIME:-0}"; _t0="${_t0/,/.}"
     bash "$script_dir/cc-focus.sh" "$1" >>"$HOME/.claude/cc-notify.log" 2>&1
+    _rc=$?
+    _t1="${EPOCHREALTIME:-0}"; _t1="${_t1/,/.}"
+    LC_ALL=C awk -v a="$_t0" -v b="$_t1" -v sid="$1" -v rc="$_rc" -v ts="$(date '+%F %T')" \
+      'BEGIN{ printf "[%s +%05.2fs] BANNER CLICK end-to-end (sid=%s rc=%s)\n", ts, (a>0&&b>0)?b-a:0, sid, rc }' \
+      >>/tmp/cc-notify/focus-route.log 2>/dev/null
     ;;
 esac
