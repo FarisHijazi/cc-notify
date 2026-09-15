@@ -7,9 +7,15 @@ const STATE_DIR = '/tmp/cc-notify'; // matches the hooks' state dir
 const DISABLE_SWEEP = `${process.env.HOME || ''}/.claude/notify.disable_sweep`;
 
 // Debug breadcrumb (also where cc-notify-doctor / tests look).
+//
+// APPEND, don't overwrite. This used to be writeFileSync, which truncated on
+// every call — so the entire history of the one component that can say WHY a
+// click went nowhere was a single line, and always the least interesting one
+// ("watcher started"). A failed focus has to leave evidence behind, because by
+// the time anyone investigates, the terminals/pids it looked at are gone.
 function breadcrumb(line) {
   try {
-    fs.writeFileSync(`${STATE_DIR}/focus.log`, `${new Date().toISOString()} ${line}\n`);
+    fs.appendFileSync(`${STATE_DIR}/focus.log`, `${new Date().toISOString()} ${line}\n`);
   } catch (e) {}
 }
 
@@ -41,8 +47,19 @@ function activate(context) {
           breadcrumb(`focus matched pid=${hit.pid} name=${hit.term.name}`);
           return;
         }
-        vscode.commands.executeCommand('workbench.action.terminal.focus');
-        breadcrumb(`focus no-match pids=[${[...wantedPids].join(',')}]`);
+        // NO fallback to workbench.action.terminal.focus. Revealing an arbitrary
+        // terminal is a WRONG answer that looks like a right one: the user asked
+        // for one specific session and lands somewhere else, while the breadcrumb
+        // and the caller's exit code both report success. Doing nothing is
+        // honest, and the window has already been raised by this point anyway
+        // (VS Code force-focuses a window whose URI handler returns).
+        const live = await Promise.all(
+          vscode.window.terminals.map((t) => t.processId.catch(() => undefined))
+        );
+        breadcrumb(
+          `focus NO-MATCH wanted=[${[...wantedPids].join(',')}] ` +
+            `terminals=[${live.filter(Boolean).join(',')}] (did nothing)`
+        );
       },
     })
   );

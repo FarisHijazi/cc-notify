@@ -195,11 +195,25 @@ cc_detect_terminal() {
   done
 
   [ -z "$CC_GUI_PID" ] && [ -n "$CC_CLIENT_TTY" ] && cc_walk_tty "$CC_CLIENT_TTY"
-  if [ -z "$CC_GUI_PID" ] && [ -n "$TMUX" ]; then
+  # Remaining clients OF THIS SESSION, most useful first — never any other
+  # session's. `#{client_tty}` above answers for one client only, and a session
+  # can have several (a real window plus tw's monitor client), so this is a real
+  # recovery path. But it must stay inside the session: an unfiltered sweep of
+  # `list-clients` adopts a client attached to something else entirely, and every
+  # field derived from it is then a lie that LOOKS valid — measured on this
+  # machine, `farishijazi-1` (whose only client is a tw monitor client) resolved
+  # to /dev/ttys001, a Ghostty client on `hub/dema-local-service…`, so the route
+  # named another window's tty and `switch-client -c` would have hijacked it.
+  # When nothing here walks to a GUI process, leaving CC_GUI_PID empty IS the
+  # answer: this session is in no window of its own, and cc-focus.sh's hub-tile
+  # path is what knows how to show it. cc_pane_route already filters this way.
+  if [ -z "$CC_GUI_PID" ] && [ -n "$TMUX" ] && [ -n "$CC_TMUX_TARGET" ]; then
+    local _sess="${CC_TMUX_TARGET%%:*}"
     while IFS= read -r cand; do
       [ -z "$cand" ] && continue
       cc_walk_tty "$cand" && break
-    done < <(tmux list-clients -F '#{client_focused}|#{client_activity}|#{client_tty}' 2>/dev/null | sort -t'|' -k1,1nr -k2,2nr | cut -d'|' -f3)
+    done < <(tmux list-clients -F '#{client_activity}|#{client_session}|#{client_tty}' 2>/dev/null \
+               | awk -F'|' -v s="$_sess" '$2==s' | sort -t'|' -k1,1nr | cut -d'|' -f3)
   fi
 
   # tmux-inside-editor: the editor's shell is the tmux client's shell (a sibling,
@@ -501,6 +515,58 @@ OSA
   return 0
 }
 
+# Focus a Cursor / VS Code window. The editor equivalent of
+# cc_focus_named_terminal, and the reason that one could never find these: it
+# matches Ghostty tab names against the tmux title, and an editor's title has
+# nothing to do with tmux. So a Cursor window hosting a tmux-watch hub was
+# invisible to every focus tier, and a click materialized a NEW Ghostty window on
+# top of a session already on screen in it.
+#
+# Two keys, in order of precision:
+#   1. the Remote-SSH marker "[SSH: <host>]". Hosts are compared with the SAME
+#      normalisation cc_hub_pane tier 2 uses (strip user@, :port, case, .local),
+#      because the bridge stamps `thmanyah.local` while the title says
+#      `thmanyah` — an exact match finds nothing.
+#   2. the workspace folder: the last " — "-separated title segment, walking up
+#      from <cwd>. This is the check cc-focus.sh used to do inline; it lives here
+#      now so both callers share one implementation — and, unlike that copy, it
+#      strips a trailing "[SSH: …]" so it works on remote windows too.
+# Args: host [cwd]. Returns 0 only when a window was really focused.
+cc_focus_editor_window() {
+  local host="${1:-}" dir="${2:-}" wins wid="" base
+  command -v aerospace >/dev/null 2>&1 || return 1
+  wins=$(aerospace list-windows --monitor all \
+           --format '%{window-id}|%{app-name}|%{window-title}' 2>/dev/null \
+         | awk -F'|' '$2=="Cursor" || $2=="Code" || $2=="Visual Studio Code" || $2=="Code - Insiders"')
+  [ -n "$wins" ] || return 1
+
+  if [ -n "$host" ]; then
+    wid=$(printf '%s\n' "$wins" | awk -F'|' -v h="$host" '
+      function key(x) { sub(/^[^@]*@/, "", x); sub(/:.*$/, "", x); x = tolower(x); sub(/\.local$/, "", x); return x }
+      { id = $1; t = $0; sub(/^[^|]*\|[^|]*\|/, "", t)
+        if (match(t, /\[SSH: [^]]+\]/)) {
+          s = substr(t, RSTART + 6, RLENGTH - 7)
+          if (key(s) == key(h)) { print id; exit }
+        } }')
+  fi
+
+  while [ -z "$wid" ] && [ -n "$dir" ] && [ "$dir" != "/" ] && [ "$dir" != "." ]; do
+    base=$(basename "$dir")
+    wid=$(printf '%s\n' "$wins" | awk -F'|' -v tb="$base" '
+      { id = $1; t = $0; sub(/^[^|]*\|[^|]*\|/, "", t)
+        n = split(t, parts, " — "); last = parts[n]
+        sub(/ \[SSH: [^]]*\]$/, "", last)
+        sub(/ \(Workspace\)$/, "", last)
+        if (last == tb) { print id; exit } }')
+    dir=$(dirname "$dir")
+  done
+
+  [ -n "$wid" ] || return 1
+  aerospace focus --window-id "$wid" >/dev/null 2>&1 || return 1
+  printf '%s' "$wid"
+  return 0
+}
+
 # Show a session's live status on its hub pane's border, so the hub doubles as a
 # dashboard of every session. Written to a pane user-option (NOT the pane title):
 # the pane runs `tmux attach`/`ssh`, and an inner program can rewrite the title at
@@ -529,13 +595,21 @@ cc_pane_route() {
   CC_TMUX_TARGET=$(tmux display-message -p -t "$pane" '#S:#I.#P' 2>/dev/null) || return 1
   [ -n "$CC_TMUX_TARGET" ] || return 1
   sess="${CC_TMUX_TARGET%%:*}"
-  # Clients attached to that pane's session, most useful first (focused, then
-  # most recently active) — the same ordering cc_detect_terminal uses.
+  # Clients attached to that pane's session, most recently active first — the
+  # same ordering cc_detect_terminal uses.
+  #
+  # This used to sort on `#{client_focused}` first. That format DOES NOT EXIST
+  # (tmux 3.5a): it expands to the empty string with rc=0, indistinguishable
+  # from a typo'd name, so the primary sort key was blank for every row and
+  # both loops have always been ordered by client_activity alone. Dropped rather
+  # than "fixed" — `client_flags` carries no focus bit either (measured:
+  # `attached,UTF-8` on all 7 clients), so tmux simply cannot answer this, and
+  # only Aerospace can. See LESSONS.
   while IFS= read -r cand; do
     [ -z "$cand" ] && continue
     cc_walk_tty "$cand" && break
-  done < <(tmux list-clients -F '#{client_focused}|#{client_activity}|#{client_session}|#{client_tty}' 2>/dev/null \
-             | awk -F'|' -v s="$sess" '$3==s' | sort -t'|' -k1,1nr -k2,2nr | cut -d'|' -f4)
+  done < <(tmux list-clients -F '#{client_activity}|#{client_session}|#{client_tty}' 2>/dev/null \
+             | awk -F'|' -v s="$sess" '$2==s' | sort -t'|' -k1,1nr | cut -d'|' -f3)
   # The editor extension matches its integrated terminal by shell pid — every pid
   # on the client tty (the tmux client's shell is a sibling, not an ancestor).
   if [ -n "$CC_CLIENT_TTY" ]; then

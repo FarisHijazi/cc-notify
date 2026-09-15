@@ -76,7 +76,16 @@ if [ -n "${remote_host:-}" ]; then
     if [ -n "$hub" ]; then
       tab=$(printf '\t')
       hub_sess="${hub%%"$tab"*}"; hub_pane="${hub##*"$tab"}"
-      if cc_focus_named_terminal "$hub_sess"; then
+      # Widen the WINDOW-FOCUSING step; do not add a tier. cc_focus_named_terminal
+      # only knows Ghostty (it matches tab names against the tmux title), so a hub
+      # running in a Cursor Remote-SSH integrated terminal was invisible and the
+      # click materialized a new Ghostty window on top of a session already on
+      # screen. The editor match belongs HERE, after cc_remote_hub_pane has
+      # already identified the exact hub+pane — putting it earlier would let a
+      # host-level match ("any Cursor window on thmanyah") beat this session-level
+      # one, which in this topology is always.
+      if cc_focus_named_terminal "$hub_sess" || cc_focus_editor_window "$remote_host" "" >/dev/null; then
+        rlog "  → focused window for hub '$hub_sess' (pane $hub_pane)"
         ssh -o BatchMode=yes -o ConnectTimeout=5 "$remote_host" \
             "tmux select-window -t '$hub_pane' 2>/dev/null; \
              tmux select-pane -t '$hub_pane' 2>/dev/null; \
@@ -195,6 +204,12 @@ tmux_jump() {
   # whatever it was on. `switch-client -c` itself is fine: it targets a client
   # directly rather than expanding a format.
   cur_ses=$(cc_client_session "$client_tty")
+  # No client on that tty → the route is stale and this tty is not ours. ttys are
+  # recycled (reload a Cursor window and the next terminal claims the number), and
+  # an empty cur_ses compares unequal to everything, so without this the line
+  # below would `switch-client` whatever DOES live there now onto our session —
+  # silently, since the command is 2>/dev/null. Answer nothing when unsure.
+  [ -n "$cur_ses" ] || return 0
   if [ "$cur_ses" != "$tmux_session" ]; then
     tmux switch-client -c "$client_tty" -t "$tmux_session" 2>/dev/null
   fi
@@ -286,31 +301,24 @@ OSA
     ;;
 
   vscode)
-    # If the captured target_wid focus didn't fire (e.g. session started before
-    # cc-capture-window.sh existed), match a Cursor/VS Code window by cwd: walk
-    # up from cwd looking for an ancestor whose basename matches the workspace
-    # folder shown in a window's title (titles look like "FILE — FOLDER"). This
-    # avoids `--reuse-window`, which OPENS a new view rooted at cwd instead of
-    # focusing an existing window.
-    if [ -z "$aerospace_focused" ] && [ -n "$cwd" ] && command -v aerospace >/dev/null 2>&1; then
-      candidates=$(aerospace list-windows --monitor all --format '%{window-id}|%{app-name}|%{window-title}' 2>/dev/null \
-        | awk -F'|' '$2 == "Cursor" || $2 == "Code" || $2 == "Visual Studio Code"')
-      dir="$cwd"
-      while [ -n "$dir" ] && [ "$dir" != "/" ]; do
-        target_base=$(basename "$dir")
-        match_wid=$(printf '%s\n' "$candidates" | awk -F'|' -v tb="$target_base" '
-          {
-            n = split($3, parts, " — ")
-            last = parts[n]
-            sub(/ \(Workspace\)$/, "", last)
-            if (last == tb) { print $1; exit }
-          }')
-        if [ -n "$match_wid" ]; then
-          aerospace focus --window-id "$match_wid" 2>/dev/null && focused=1
-          break
-        fi
-        dir=$(dirname "$dir")
-      done
+    # If the captured target_wid focus didn't fire (e.g. a session that started
+    # before cc-capture-window.sh existed), find the window ourselves. Never
+    # `--reuse-window`: that OPENS a new view rooted at cwd instead of focusing
+    # an existing window. cc_focus_editor_window holds both keys (cc-lib.sh).
+    #
+    # WHICH key depends on where the session lives. `cwd` is only a local path
+    # for a LOCAL session — a remote session's route carries the REMOTE cwd
+    # verbatim (measured: `/home/service/Projects/thmanyah.d/...`), and walking
+    # that up hits `thmanyah.d` / `demaenergy.d`, folder names that also exist on
+    # this Mac, so the old cwd walk would confidently focus the WRONG, local
+    # window. For a remote session the host is the key instead: the
+    # `[SSH: <host>]` marker in the title is what identifies its window.
+    if [ -z "$aerospace_focused" ]; then
+      if [ -n "${remote_host:-}" ]; then
+        match_wid=$(cc_focus_editor_window "$remote_host" "") && focused=1
+      else
+        match_wid=$(cc_focus_editor_window "" "$cwd") && focused=1
+      fi
     fi
     # Last-resort fallback: activate the app (NO --reuse-window — that opens
     # a new window/folder, which is exactly what the user doesn't want).
@@ -328,8 +336,18 @@ OSA
     # only mechanism VS Code/Cursor expose for this is the Terminal API, so we
     # ask the cc-notify-focus extension (if installed) to .show() the terminal
     # whose shell pid is in our captured ancestor chain. See editor-extension/.
-    focused_wid="${wid:-$match_wid}"
+    focused_wid="${wid:-${match_wid:-}}"
     focus_vscode_terminal "$focused_wid"
+
+    # Revealing the terminal is only half the jump: Claude almost always runs in
+    # tmux INSIDE that terminal, and one integrated terminal hosts a client that
+    # can be sitting on any session. Without this the click focused the right
+    # pane and left tmux showing whatever was there before — and a hub tile
+    # resolved into `focus_pane` above was computed and then silently thrown
+    # away, because `cc_pane_route` hands a Cursor-hosted hub back as term=vscode
+    # (see LESSONS). Every other terminal type has always done this.
+    sleep 0.15
+    tmux_jump
     ;;
 
   iTerm.app)
@@ -348,7 +366,19 @@ OSA
     ;;
 
   *)
-    echo "$(date -u +%FT%TZ) unknown term '$term' for session $session_id" >>"$HOME/.claude/inbox.log"
+    # Reached whenever the session is in NO window of its own — term stays `tmux`
+    # because no client of it walks to a GUI process. That is the normal shape of
+    # a tcc session (its only client is tw's monitor client), and it is now also
+    # the honest answer cc_detect_terminal gives instead of adopting some other
+    # session's client. The block above may still have resolved a perfect hub
+    # tile into focus_pane/target_wid, so do NOT drop it on the floor the way the
+    # bare log line did — that is the same "resolved tile routed into a branch
+    # that does no tmux work" cliff this release exists to close. tmux_jump
+    # self-noops without a client_tty, so this is safe in the genuinely unknown
+    # case too.
+    rlog "no GUI branch for term='$term' — tmux_jump only (session in no window of its own)"
+    echo "$(date -u +%FT%TZ) no GUI branch for term '$term', session $session_id" >>"$HOME/.claude/inbox.log"
+    tmux_jump
     ;;
 esac
 

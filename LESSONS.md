@@ -731,3 +731,81 @@ report.** Both halves failed silently in the direction of silence — the exact
 failure a notification system cannot detect about itself. Check liveness
 (`launchctl list`, a per-host last-event timestamp) rather than waiting for an
 error that has no one to write it.
+
+## 33. tmux has no `client_focused` — and an unknown format is indistinguishable from an empty one
+
+`cc_detect_terminal` and `cc_pane_route` both picked a client with
+
+```bash
+tmux list-clients -F '#{client_focused}|#{client_activity}|…' | sort -t'|' -k1,1nr -k2,2nr
+```
+
+intending "the focused client first, then the most recently active". **There is no
+`client_focused` format.** On tmux 3.5a it expands to the empty string with rc=0 —
+byte-identical to a deliberately typo'd `#{client_bogus_xyz}`:
+
+```text
+$ tmux display-message -p 'focused=[#{client_focused}] typo=[#{client_bogus_xyz}]'
+focused=[] typo=[]
+$ strings $(command -v tmux) | grep -x 'client_[a-z_]*'   # no client_focused
+client_activity  client_flags  client_session  client_tty  …
+```
+
+So the primary sort key was blank on every row and both loops had *always* been
+ordered by `client_activity` alone. The comment said one thing, the code did
+another, and nothing could ever have revealed it — the intended and actual
+orderings agree whenever there is one client, which is almost always.
+
+`client_flags` carries no focus bit either (measured: `attached,UTF-8` on all
+seven clients here), so **tmux cannot answer "which client is focused" at all**;
+only the window manager can. The keys were deleted rather than fixed.
+
+Same family as #31: a format string is not a schema, and tmux validates nothing.
+**Test a format by asking for something whose answer you already know and that is
+not empty** — if a real field and a nonsense field render identically, you have
+learned nothing about either.
+
+## 34. Focus tiers must be ordered by PRECISION, and a resolved target must never fall into a branch that ignores it
+
+Two bugs with one shape, both found while making click-to-focus work for Claude
+running in tmux inside a Cursor / VS Code integrated terminal.
+
+**(a) The `vscode)` branch of `cc-focus.sh` issued no tmux command at all.**
+`tmux_jump` was called for Terminal.app, iTerm and Ghostty — never for editors.
+So a click focused the right window and the right terminal pane, then left that
+terminal's tmux client on whatever session it was already showing. Worse,
+`cc_pane_route` *hands a hub tile back as `term=vscode`* whenever the hub's tmux
+client lives in a Cursor terminal — so the more correctly the tile was resolved,
+the more certainly `focus_pane` was computed and then thrown away. The `*)`
+fallback had the same defect: it logged "unknown term" and exited 1, discarding a
+perfectly good `focus_pane`/`target_wid`.
+
+*Rule: every branch that a resolved target can reach must consume it. A branch
+that can be reached with an answer in hand and does nothing with it is a silent
+cliff — the LESSONS #28 pattern, one level up.*
+
+**(b) A host-level match must never be tried before a session-level one.**
+`cc_focus_named_terminal` only knows Ghostty (it matches tab names against the
+tmux title), so a tmux-watch hub hosted in a Cursor **Remote-SSH** window was
+invisible to every tier and the click materialized a *new Ghostty window* onto
+sessions already on screen. The fix is a Cursor/VS Code window matcher keyed on
+the `[SSH: <host>]` marker in the window title — but the tempting insertion point
+(right after the first Ghostty attempt fails) is wrong: it would let "any Cursor
+window on `thmanyah`" beat `cc_remote_hub_pane`, which identifies *the hub
+actually displaying this session*. In that topology the host-level match always
+wins the race, so the exact answer would never run. Correct order, and the one
+that shipped: local hub tile → Ghostty by session title → Ghostty by hub title →
+**Cursor by SSH marker** → materialize. It is one `||` widening the existing
+window-focusing step, not a new tier.
+
+Two supporting traps found alongside:
+
+- **A remote session's route carries the REMOTE `cwd`** (`/home/service/…`). The
+  vscode branch's "walk up from cwd and match a workspace-folder basename" then
+  matches a **local** window, because `thmanyah.d` exists on both machines. Gate
+  that walk on `remote_host` being empty; for a remote session the host is the key.
+- **`switch-client -c <tty>` fires on a recycled tty.** If the tty no longer hosts
+  a client, `cc_client_session` returns empty, empty `!=` the target session, and
+  the switch runs against whatever claimed that tty since. Return early on an
+  empty answer — same "when unsure, answer nothing" discipline that stopped
+  `cc_detect_terminal` adopting another session's client.

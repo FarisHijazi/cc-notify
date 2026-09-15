@@ -81,3 +81,44 @@ else
     | awk 'NF>2' | sed 's/\t/:/' | head -20
   echo "  log: /tmp/cc-notify/remote-bridge.log"
 fi
+
+bold "== 8. Editor integration (VS Code / Cursor) =="
+ext_src="$(cd "$(dirname "$0")/../editor-extension" 2>/dev/null && pwd)"
+if [ -z "$ext_src" ] || [ ! -f "$ext_src/package.json" ]; then
+  echo "  ✗ editor-extension/ not found next to this script"
+else
+  want_ver="$(sed -n 's/.*"version"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "$ext_src/package.json" | head -1)"
+  echo "  manifest version: ${want_ver:-?}"
+  # extensionKind MUST be ui: with a `main` and no extensionKind, VS Code deduces
+  # ['workspace'] and a Remote-SSH window runs it on the REMOTE box — where it is
+  # typically not installed, so there is no handler at all. See LESSONS.
+  grep -q '"ui"' "$ext_src/package.json" \
+    && echo "  extensionKind:    ui (correct — runs locally even in a Remote-SSH window)" \
+    || echo "  ✗ extensionKind not \"ui\" — a Remote-SSH window will have NO handler"
+  found=0
+  for d in "$HOME/.vscode/extensions" "$HOME/.cursor/extensions"; do
+    [ -d "$d" ] || continue
+    for link in "$d"/farishijazi.cc-notify-focus-*; do
+      [ -e "$link" ] || continue
+      found=1
+      have_ver="${link##*cc-notify-focus-}"
+      if [ "$have_ver" = "$want_ver" ]; then
+        echo "  ✔ $(basename "$d")/$(basename "$link")"
+      else
+        # The folder name MUST equal <publisher>.<name>-<version> or the editor
+        # calls the unpacked extension invalid and tries to reinstall it from the
+        # marketplace by id — the v1.7.10 "cannot be installed" toast.
+        echo "  ✗ $(basename "$d")/$(basename "$link") is v$have_ver but manifest is v$want_ver → re-run bin/cc-install-editor-extension"
+      fi
+    done
+  done
+  [ "$found" = 1 ] || echo "  ✗ not installed in either editor (run bin/cc-install-editor-extension)"
+  # Liveness. The breadcrumb APPENDS, so the last line is the last real action;
+  # 'watcher started' alone means it loaded but has never been asked to focus.
+  if [ -s /tmp/cc-notify/focus.log ]; then
+    echo "  focus.log ($(wc -l </tmp/cc-notify/focus.log | tr -d ' ') lines), last:"
+    echo "    $(tail -1 /tmp/cc-notify/focus.log)"
+  else
+    echo "  ✗ /tmp/cc-notify/focus.log empty — extension never activated (reload the editor window)"
+  fi
+fi

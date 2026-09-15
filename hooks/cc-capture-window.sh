@@ -95,10 +95,23 @@ if [ "$full" = 1 ]; then
   # alike. + color/title from the transcript. Detached so the hook returns fast.
   cc_detect_terminal
   cc_session_meta "$transcript_path" "$(basename "${cwd:-$PWD}")"
-  if [ "$CC_TERM" = "vscode" ] && [ -n "$CC_SHELL_PIDS" ]; then
-    name=$(cc_tab_name "$(cc_status_emoji "$status")" "$CC_COLOR_EMOJI" "$CC_TITLE")
-    ( cc_write_tab "$session_id" "$CC_SHELL_PIDS" "$name" </dev/null >/dev/null 2>&1 & )
-  fi
+  # Write the .tab UNCONDITIONALLY — no `term = vscode` gate.
+  #
+  # The gate was the LESSONS #18 bug class at its root. `cc_detect_terminal` is
+  # flaky under tmux, and this writer had no `else` at all, so a session whose
+  # very FIRST full event flaked never got a .tab — and `cc_set_status` cannot
+  # repair that, because it no-ops when the file does not exist. The tab then
+  # stayed wrong forever.
+  #
+  # Dropping the gate is safe rather than merely convenient: the .tab is just
+  # {pids, name}, and the extension renames only a terminal whose
+  # `Terminal.processId` is IN that pid set. A Ghostty or bare-tmux session's
+  # ancestor pids can never be a VS Code integrated terminal's shell pid, so a
+  # .tab written for a non-editor session is inert. Cost is one small file per
+  # session in /tmp; the benefit is that a flaked detection can no longer cost a
+  # session its tab.
+  name=$(cc_tab_name "$(cc_status_emoji "$status")" "$CC_COLOR_EMOJI" "$CC_TITLE")
+  ( cc_write_tab "$session_id" "$CC_SHELL_PIDS" "$name" </dev/null >/dev/null 2>&1 & )
   # Project color sync via <cwd>/.cc/settings.json (key "color"). Direction is
   # strictly one-way per event, so the two writers can never race each other:
   #   SessionStart      → settings WIN: apply the configured color to the session
