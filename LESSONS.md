@@ -636,3 +636,98 @@ single ssh command.
 Tested for all five shapes (tiled → maximizes; zoomed elsewhere → moves the
 maximize; already zoomed on the target → stays; off switch → selects only;
 single-pane → no flag), then end-to-end on a live hub with the state restored.
+
+## 31. `tmux display-message -c <tty>` answers about the CALLER, silently
+
+`-c` selects the client for *client* formats, but tmux still expands the format
+against the **current pane** — and a hook always runs inside some pane. So from a
+hook, every one of these returns the hook's OWN session, with `rc=0` and no
+warning:
+
+```bash
+tmux display-message -c /dev/ttys002 -p '#S'                # caller's session
+tmux display-message -c /dev/ttys002 -p '#{client_session}' # caller's session
+```
+
+Measured on tmux 3.5a: asked about three different clients attached to three
+different sessions, it returned the caller's session all three times. Unsetting
+`$TMUX` does not fix it — with no current client tmux falls back to the most
+recently active one, which is whoever just ran a command (you).
+
+This broke two things in cc-notify for as long as they had existed:
+
+- `cc_wid_for_tty` expanded `#{T:set-titles-string}` for the *caller*, so the
+  Ghostty tab-name match never matched, and it fell through to
+  `aerospace list-windows --pid | head -1` — the very coin flip between
+  same-pid windows (LESSONS #10/#24) the function exists to avoid. A click
+  focused window 61 for a session living in window 60.
+- `tmux_jump` compared `cur_ses` (the caller = the clicked session) against the
+  session it wanted to switch to, found them equal, and **skipped
+  `switch-client` entirely**.
+
+Ask `list-clients`, which is version-proof and unambiguous:
+
+```bash
+tmux list-clients -F '#{client_tty}	#{client_session}' | awk -F'\t' -v t="$tty" '$1==t{print $2; exit}'
+```
+
+Then expand any pane/session format against `-t "<session>:"`. `switch-client -c`
+is unaffected — it targets a client directly instead of expanding a format.
+
+**The general trap:** a flag that is accepted, documented, and returns 0 can still
+be ignored. When a lookup takes a *target* argument, test it by asking about
+something whose answer you already know and that differs from the caller's — if
+you only ever test it on yourself, "returns the caller" and "works" are the same
+observation.
+
+## 32. Wiring that lives in someone else's file is wiring that will disappear
+
+Remote notifications had been dead for five days, in two independent places, and
+neither left an error anywhere.
+
+**The emitter vanished.** The remote half was installed imperatively by
+`bin/cc-install-remote`: scp two files to `~/.claude/`, then merge hook entries
+into the remote's `~/.claude/settings.json`. That file has other owners. Something
+rewrote it on all three boxes — the merged entries gone, the scp'd script gone,
+`settings.json.cc-bak` still sitting there from the install, events stopping dead
+the same day. Nothing announces that a hook is no longer registered; the machine
+just goes quiet, and quiet is indistinguishable from idle.
+
+The plugin was installed and auto-updating on those same boxes the whole time, and
+its own `hooks.json` never mentioned `cc-remote-emit.sh`. So the fix is to dispatch
+it from the hooks the plugin *already* registers (`cc_remote_emit` in cc-lib.sh,
+called by cc-capture-window.sh and cc-notify.sh) — no scp, no foreign file to
+merge into, and it arrives on every box by itself with the next plugin update.
+The collector opts out with `notify.disable_remote_emit`, which
+`cc-install-remote-agent` now drops for the Mac: installing the bridge is the
+declaration that this machine is the hub, not a leaf.
+
+**The collector couldn't start.** `cc-install-remote-agent` baked its own
+install-time path into the plist:
+
+```xml
+<array><string>…/plugins/cache/farishijazi-plugins/cc-notify/1.8.1/bin/cc-remote-bridge</string></array>
+```
+
+The cache prunes old versions, so once 1.8.1 was gone launchd had nothing to exec:
+**status 78, KeepAlive respawning into the same missing file, and an empty
+`remote-agent.log`** — the log a plist points at with `StandardErrorPath` is
+written by the *program*, so a program that never runs writes nothing, and the
+emptiness reads exactly like "no errors". `launchctl list | grep <label>` is the
+tell: a `-` in the PID column with a non-zero status.
+
+Any launchd job, cron entry, or keybinding pointing into a versioned cache is a
+time bomb with the same fuse — the Karabiner hotkey had already been defused this
+way (LESSONS #28). Resolve at launch instead of at install, newest-first:
+
+```bash
+for p in "$HOME"/Projects/cc-notify/bin/X $(ls -d "$HOME"/.claude/plugins/cache/*/cc-notify/*/bin/X 2>/dev/null | sort -Vr); do
+  [ -x "$p" ] && exec "$p"
+done
+```
+
+**Rule: a component that stops reporting is not a component that has nothing to
+report.** Both halves failed silently in the direction of silence — the exact
+failure a notification system cannot detect about itself. Check liveness
+(`launchctl list`, a per-host last-event timestamp) rather than waiting for an
+error that has no one to write it.
