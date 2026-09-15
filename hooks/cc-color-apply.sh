@@ -20,6 +20,19 @@
 # after the text (the TUI is still opening the slash-command menu) and a
 # read-back afterwards, because a swallowed Enter looks exactly like success.
 #
+# --raw is necessary but NOT sufficient, which cost this hook roughly half its
+# applies (colorsync.log: "box holds '', expected '/color blue'"). Typing
+# "/color " opens the slash-command menu; that moves the input row, so
+# cc-prompt-state stops finding a box at all and exits 2 with EMPTY stdout. The
+# old code captured stdout and dropped the exit code, so "menu is open" was
+# indistinguishable from "our text vanished" and it aborted one keystroke before
+# Enter. The same blind comparison ended the Enter-retry loop on its first pass,
+# so a swallowed Enter was never actually retried. Both now verify against the
+# PANE (still_typed) whenever the box reads empty or unreadable, and only a box
+# holding genuinely DIFFERENT text still aborts — that one really is the user
+# typing. Cross-checked against auto-compact-continue.sh, which types into the
+# same pane and learned this first.
+#
 # Usage: cc-color-apply.sh <tmux-target> <color>
 # Spawned detached by cc-capture-window.sh on SessionStart when
 # <cwd>/.cc/settings.json holds {"color": ...} differing from the session's own.
@@ -52,6 +65,36 @@ command -v cc_type_lock >/dev/null 2>&1 || { cc_type_lock() { :; }; cc_type_unlo
 mkdir -p /tmp/cc-notify 2>/dev/null
 log() { printf '[%s] %s\n' "$(date '+%F %T')" "$*" >>/tmp/cc-notify/colorsync.log 2>/dev/null; }
 
+MARK=$'\342\235\257'   # U+276F  the prompt marker Claude Code draws
+NBSP=$'\302\240'        # U+00A0  separates the marker from UNSENT text
+
+# --raw read with the input row's padding treated as the whitespace it is, and
+# the exit code PRESERVED. Claude Code separates "❯" from the text with U+00A0;
+# bash trims that with [[:space:]] on macOS but not under glibc, so without this
+# a Debian box compares "\u00a0/color blue" against "/color blue" and never
+# matches. stdout: normalised text. return: 0 empty, 1 has text, 2 no box.
+read_raw() {
+  local t rc
+  t=$("$prompt_state" --raw "$1" 2>/dev/null); rc=$?
+  t="${t//$NBSP/ }"
+  t="${t#"${t%%[![:space:]]*}"}"
+  t="${t%"${t##*[![:space:]]}"}"
+  printf '%s' "$t"
+  return "$rc"
+}
+
+# Is $2 still sitting UNSENT in the input row of pane $1?
+# Read straight off the pane, because typing "/color " opens the slash-command
+# menu and cc-prompt-state then reports "no input box" (exit 2, empty stdout) --
+# which is indistinguishable from "our text vanished" unless we look ourselves.
+# The UNSENT row is "❯" + U+00A0 + text; a SUBMITTED echo uses an ordinary
+# space, so the NBSP is exactly what separates "waiting" from "gone". Bottom 12
+# rows only, prefix-matched, so a wrapped row and the scrollback both behave.
+still_typed() {
+  tmux capture-pane -p -t "$1" 2>/dev/null | tail -12 |
+    grep -qF -- "$MARK$NBSP${2:0:24}"
+}
+
 want="/color $color"
 deadline=$(( $(date +%s) + ${CC_COLOR_APPLY_TIMEOUT:-25} ))
 while [ "$(date +%s)" -lt "$deadline" ]; do
@@ -65,20 +108,34 @@ while [ "$(date +%s)" -lt "$deadline" ]; do
       fi
       tmux send-keys -t "$target" -l -- "$want" 2>/dev/null || { log "$target: send-keys failed"; exit 1; }
       sleep "${CC_COLOR_ENTER_DELAY:-1}"
-      cur=$("$prompt_state" --raw "$target" 2>/dev/null)
+      cur=$(read_raw "$target"); rc=$?
       if [ "$cur" != "$want" ]; then
-        # User typed in the gap — leave whatever is there UNSENT (visible,
-        # harmless); backspacing would eat the characters they just typed.
-        log "$target: ABORT before Enter — box holds '$cur', expected '$want'"
-        exit 1
+        if [ "$rc" -eq 1 ] && [ -n "$cur" ]; then
+          # The box genuinely holds something else: the user typed in the gap.
+          # Leave it UNSENT (visible, harmless) -- backspacing would eat the
+          # characters they just typed.
+          log "$target: ABORT before Enter — box holds '$cur', expected '$want'"
+          exit 1
+        fi
+        # Empty or unreadable. That is NOT evidence our text is missing: typing
+        # "/color " opens the slash-command menu, which moves the input row and
+        # makes cc-prompt-state report "no box" with empty stdout. Ask the pane.
+        if ! still_typed "$target" "$want"; then
+          log "$target: ABORT before Enter — '$want' never reached the input row"
+          exit 1
+        fi
+        log "$target: box read '$cur' (rc=$rc) but '$want' is on the row — proceeding"
       fi
       tmux send-keys -t "$target" Enter 2>/dev/null
       # A swallowed Enter leaves the command in the box looking submitted. Keep
       # pressing while it is still there; stop the moment it clears.
+      # Watch the ROW, not cc-prompt-state: while the slash-command menu is up
+      # the box reads empty, which the old comparison took as "submitted" and
+      # broke out on the first pass -- so a swallowed Enter was never retried.
       end=$(( $(date +%s) + ${CC_COLOR_CONFIRM_SECS:-10} )); n=0
       while :; do
         sleep 0.5
-        [ "$("$prompt_state" --raw "$target" 2>/dev/null)" = "$want" ] || break
+        still_typed "$target" "$want" || break
         [ "$(date +%s)" -ge "$end" ] && { log "$target: '$want' STILL unsent after ${CC_COLOR_CONFIRM_SECS:-10}s"; exit 1; }
         tmux send-keys -t "$target" Enter 2>/dev/null; n=$(( n + 1 ))
       done
