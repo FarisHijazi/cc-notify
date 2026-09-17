@@ -116,6 +116,22 @@ if [ -n "${remote_host:-}" ]; then
         exit 0
       fi
     fi
+    # One look wider before materializing: this Mac may be watching the box in
+    # a tw hub that simply has no tile for THIS session — the watcher never
+    # added it, and the 3s poll above already gave it every chance. Focus that
+    # hub window anyway. It is where the user keeps this box, it is already on
+    # screen, and the watcher drops the tile into it when it catches up; a new
+    # window is a second place to look for the same machine. Nothing inside the
+    # hub is selected or zoomed: only the tiers that found the actual session
+    # have earned the right to move what is focused inside it.
+    hub_host=$(cc_host_hub_session "$remote_host")
+    if [ -n "$hub_host" ] && cc_focus_named_terminal "$hub_host"; then
+      rlog "  → no tile for $remote_sess; focused local hub '$hub_host' watching $remote_host"
+      echo "focused the local hub watching ${remote_host} (it has no tile for ${remote_sess} yet)"
+      exit 0
+    fi
+    rlog "  cc_host_hub_session=${hub_host:-none}"
+
     # Nothing on this Mac is showing it — materialize the view. A click is an
     # explicit user action, so opening a window is what they asked for.
     #
