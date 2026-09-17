@@ -907,3 +907,52 @@ fine — and a live multiplexed connection to that box was sitting open in
 to is infrastructure — find it and use it. And when an identifier can name the
 same resource by several routes, "the one that was written down" and "the one
 that works" are different questions; ask the second one at the moment of use.*
+
+## 37. tmux DELETES the tab out of a format string unless it is in UTF-8 mode
+
+Reported as: *"click-to-focus works for cursor/vscode and for local Ghostty, but
+a Ghostty window running `tw dema.local:` gets ignored — the click opens a whole
+new window instead."* The remote-session tiers were all suspects. None of them
+was the bug.
+
+**The measurement.** Every "where is this session on screen" lookup is keyed on
+tmux-watch's `@tw-src = "<host>\t<session>"`, split on that tab. The same pane,
+same tmux server, same second, asked twice:
+
+```
+$ LC_CTYPE=UTF-8 tmux list-panes -a -F '#{@tw-src}' | grep dema | od -c
+      d   e   m   a   .   l   o   c   a   l  \t   d   e   m   a ...
+$ env -i PATH=... tmux list-panes -a -F '#{@tw-src}' | grep dema | od -c
+      d   e   m   a   .   l   o   c   a   l   _   d   e   m   a ...
+```
+
+A TAB is an unprintable byte, and tmux sanitizes unprintable bytes out of
+`#{...}` output when its client is not in UTF-8 mode. Not an error, not a
+warning — **an underscore**. `awk -F'\t'` then sees one field instead of two, so
+the host is gone and the session name is glued to it.
+
+**Why only that one topology.** A GUI terminal inherits a UTF-8 locale from the
+login shell, so every hook Claude Code spawns was always fine. The remote bridge
+is a launchd agent, and its plist sets `PATH` and nothing else — no `LANG`, no
+`LC_*`. Everything downstream of it inherited that: `_hosts()` discovered zero
+hosts (so a pinned list was silently doing 100% of the work), `cc_hub_pane`
+found nothing for a box plainly tiled on screen, and the click — spawned by the
+bridge, so same env — fell past every local tier into "nothing here is showing
+it" and materialized a second window on top of the first.
+
+`thmanyah` masked it: its hub runs *on* the box, so the click fell through to
+`cc_remote_hub_pane` + `cc_focus_editor_window` and landed on the Cursor
+Remote-SSH window anyway. One topology accidentally had a second path home, and
+the other did not.
+
+**Log lines that were true and useless.** `tw does not watch this host locally`
+was emitted *while* eight local panes carried `@tw-src` for that host. The log
+faithfully reported the function's answer; nobody asked whether the function
+could see. A diagnostic that can only report a conclusion will happily narrate a
+blind process.
+
+*Rule: a format string is not a wire protocol. If a separator has to survive a
+tool's output, either make it printable or own the locale — and if a lookup key
+can come back subtly reshaped rather than empty, test the parser under the
+environment your daemon actually has, not the one your shell has. `env -i` is
+the test.*

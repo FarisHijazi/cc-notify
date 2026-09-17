@@ -3,6 +3,48 @@
 # Single source of truth for session color/title, status emojis, the tab-name
 # format, and firing the terminal-rename URI.
 
+# ---------------------------------------------------------------------------
+# tmux STRIPS the tab out of `@tw-src` unless it is in UTF-8 mode.
+#
+# Every "where is this session on screen" lookup is keyed on tmux-watch's
+# @tw-src = "<host>\t<session>", split on that tab. But tmux sanitizes
+# unprintable bytes out of `#{...}` format output when its client is not in
+# UTF-8 mode, and a TAB is unprintable — so the SAME pane answers:
+#
+#   LC_CTYPE=UTF-8   dema.local<TAB>demaenergy_d-2   → host + session (2 fields)
+#   (no locale)      dema.local_demaenergy_d-2       → one field, host lost
+#
+# A GUI terminal inherits a UTF-8 locale from the login shell, so every local
+# hook was always fine. The remote bridge is a launchd agent whose plist sets
+# only PATH — no locale at all — so `cc_hub_pane` there found NOTHING for a box
+# that was plainly tiled on screen, `_hosts` discovered no hosts, and a click on
+# a remote banner (spawned by the bridge, inheriting its env) fell past every
+# local tier and materialized a second window onto a session already visible.
+#
+# Fixing it in the plist alone would leave the same trap for any other caller
+# with a thin environment, so it is fixed HERE, once, for everything that
+# sources this file. Only LC_CTYPE is touched — the explicit `LC_ALL=C awk`
+# prefixes elsewhere still win, because a per-command assignment beats the
+# environment.
+cc_ensure_utf8() {
+  case "${LC_ALL:-${LC_CTYPE:-${LANG:-}}}" in
+    *UTF-8*|*utf-8*|*UTF8*|*utf8*) return 0 ;;
+  esac
+  local cand
+  # macOS accepts the bare "UTF-8"; glibc wants a real name. Verify rather than
+  # branch on uname: a locale that is not installed silently degrades to C,
+  # which is the exact state being fixed.
+  for cand in C.UTF-8 en_US.UTF-8 UTF-8; do
+    if [ "$(LC_ALL="$cand" locale charmap 2>/dev/null)" = "UTF-8" ]; then
+      unset LC_ALL          # a non-UTF-8 LC_ALL would override LC_CTYPE
+      export LC_CTYPE="$cand"
+      return 0
+    fi
+  done
+  return 1
+}
+cc_ensure_utf8
+
 # Claude /color (agentColor) → identity color emoji.
 cc_color_emoji() {
   case "$1" in
@@ -532,8 +574,14 @@ cc_remote_hub_pane() {
   local host="$1" sess="$2"
   [ -n "$host" ] && [ -n "$sess" ] || return 0
   case "$sess" in *[!A-Za-z0-9._-]*) return 0 ;; esac
+  # LC_CTYPE on the FAR side for the same reason it is set on this one: the tab
+  # inside @tw-src does not survive a tmux that is not in UTF-8 mode, and a
+  # non-interactive ssh command gets whatever locale sshd hands it — which is
+  # frequently none. Without this the split below silently yields one field.
+  # C.UTF-8, not "UTF-8": the bare name is macOS-only and resolves to ASCII on
+  # glibc, i.e. exactly the breakage this line exists to prevent.
   cc_ssh "$host" \
-      "tmux list-panes -a -F '#{session_attached}|#{session_name}|#{pane_id}|#{@tw-src}' 2>/dev/null" 2>/dev/null \
+      "LC_ALL= LC_CTYPE=${CC_REMOTE_LC_CTYPE:-C.UTF-8} tmux list-panes -a -F '#{session_attached}|#{session_name}|#{pane_id}|#{@tw-src}' 2>/dev/null" 2>/dev/null \
     | awk -F'|' -v s="$sess" '
         {
           n = split($4, tw, "\t")            # @tw-src = "<host>\t<session>"
@@ -577,18 +625,29 @@ cc_select_and_zoom() {
 }
 
 cc_focus_named_terminal() {
-  local sess="$1" name="" wid=""
+  local sess="$1" name=""
   [ -n "$sess" ] || return 1
-  [ -d /Applications/Ghostty.app ] || return 1
   # '/' is allowed: tmux-watch hub sessions are named "hub/<user>__<hash>", and
   # a REMOTE hub's window is the only thing showing its watched sessions.
   case "$sess" in ""|*[!A-Za-z0-9._/-]*) return 1 ;; esac
-  name=$(osascript 2>/dev/null <<OSA
+
+  # Ghostty first (the host terminal), then Terminal.app. Both name their tabs
+  # from the tmux title, which .tmux.conf pins to "<session> · <host>" — so the
+  # session name plus that separator identifies the tab in either app. Widening
+  # this ONE step is deliberate: a Terminal.app window showing the session used
+  # to be invisible to every tier, so a click piled a new Ghostty window on top
+  # of it — the single thing a click must never do.
+  # `pgrep -xq`, not just "is it installed": `tell application "X"` LAUNCHES a
+  # non-running app. A click that falls through to this tier must never open an
+  # empty Terminal.app window as a side effect of asking whether one exists.
+  # -x (exact process name), never -f — see the pgrep rule in CLAUDE.md.
+  if pgrep -xq ghostty 2>/dev/null; then
+    name=$(osascript 2>/dev/null <<OSA
 tell application "Ghostty"
   repeat with w in windows
     repeat with t in tabs of w
-      -- Read the name BEFORE focusing: `t` is an index-based reference and
-      -- `focus` reorders Ghostty's window list, so a `name of t` afterwards
+      -- Read the name BEFORE focusing: \`t\` is an index-based reference and
+      -- \`focus\` reorders Ghostty's window list, so a \`name of t\` afterwards
       -- resolves to a DIFFERENT tab (it returned the wrong window every time).
       set n to name of t
       if n starts with "$sess · " then
@@ -601,13 +660,45 @@ tell application "Ghostty"
 end tell
 OSA
 )
-  [ -n "$name" ] || return 1
-  # AppleScript focused the tab; only aerospace can bring its workspace along.
-  if command -v aerospace >/dev/null 2>&1; then
-    wid=$(aerospace list-windows --monitor all --format '%{window-id}|%{window-title}' 2>/dev/null \
-      | awk -F'|' -v n="$name" '{ id=$1; sub(/^[^|]*\|/,""); if ($0==n) { print id; exit } }')
-    [ -n "$wid" ] && aerospace focus --window-id "$wid" >/dev/null 2>&1
   fi
+
+  if [ -z "$name" ] && pgrep -xq Terminal 2>/dev/null; then
+    name=$(osascript 2>/dev/null <<OSA
+tell application "Terminal"
+  repeat with w in windows
+    repeat with t in tabs of w
+      try
+        set n to name of t
+        if n starts with "$sess · " then
+          set selected of t to true
+          set index of w to 1
+          set frontmost of w to true
+          activate
+          return n
+        end if
+      end try
+    end repeat
+  end repeat
+  return ""
+end tell
+OSA
+)
+  fi
+
+  [ -n "$name" ] || return 1
+  cc_aerospace_focus_titled "$name"
+  return 0
+}
+
+# AppleScript focused the tab; only aerospace can bring its WORKSPACE along.
+# Best effort — a focused tab on the current workspace is already the answer.
+cc_aerospace_focus_titled() {
+  local name="$1" wid
+  [ -n "$name" ] || return 0
+  command -v aerospace >/dev/null 2>&1 || return 0
+  wid=$(aerospace list-windows --monitor all --format '%{window-id}|%{window-title}' 2>/dev/null \
+    | awk -F'|' -v n="$name" '{ id=$1; sub(/^[^|]*\|/,""); if ($0==n) { print id; exit } }')
+  [ -n "$wid" ] && aerospace focus --window-id "$wid" >/dev/null 2>&1
   return 0
 }
 

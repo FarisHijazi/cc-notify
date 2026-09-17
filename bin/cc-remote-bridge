@@ -55,11 +55,22 @@ _kill_tree() {
 # ~/.claude/notify.remote-hosts. Zero config in the common case.
 # ---------------------------------------------------------------------------
 _hosts() {
+  # Pinned first, discovered second — then one entry per BOX, not per alias.
+  #
+  # `sort -u` only deduped identical strings, so the moment @tw-src discovery
+  # started working again (it had been silently empty: see cc_ensure_utf8 in
+  # cc-lib.sh) a box pinned as `dema` and tiled as `dema.local` got TWO
+  # streamers: two ssh tails, two seen-files, and both racing to write the same
+  # $sid.route. They are one machine — cc_host_key is the equivalence class the
+  # rest of the code already routes by. Order decides which spelling survives,
+  # and the pinned one wins because that is the alias the user chose.
   {
-    tmux list-panes -a -F '#{@tw-src}' 2>/dev/null | awk -F'\t' 'NF>1 && $1!="" {print $1}'
     [ -f "$HOME/.claude/notify.remote-hosts" ] \
       && sed 's/#.*//; s/[[:space:]]//g' "$HOME/.claude/notify.remote-hosts"
-  } 2>/dev/null | grep -v '^$' | sort -u
+    tmux list-panes -a -F '#{@tw-src}' 2>/dev/null | awk -F'\t' 'NF>1 && $1!="" {print $1}'
+  } 2>/dev/null | grep -v '^$' | while IFS= read -r h; do
+    printf '%s\t%s\n' "$(cc_host_key "$h")" "$h"
+  done | awk -F'\t' '!seen[$1]++ {print $2}'
 }
 
 # ---------------------------------------------------------------------------
