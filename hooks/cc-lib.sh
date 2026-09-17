@@ -482,6 +482,33 @@ cc_host_watched_locally() {
     END { exit(found ? 0 : 1) }'
 }
 
+# Which LOCAL hub session is watching $1 — any tile, any session on that box.
+#
+# The step between cc_hub_pane ("where is THIS session on screen") and giving up.
+# A hub whose watcher has not added a tile for one session is still the window
+# the user keeps that box in, and it is already on screen; a new window is not.
+# A hub with a client attached wins, because that is the one in a real window —
+# a hub nobody is attached to would need materializing too, which is the thing
+# this tier exists to avoid. Same host normalisation as cc_hub_pane tier 2.
+cc_host_hub_session() {
+  local host="$1"
+  [ -n "$host" ] || return 1
+  command -v tmux >/dev/null 2>&1 || return 1
+  tmux list-panes -a -F '#{session_attached}|#{session_name}|#{@tw-src}' 2>/dev/null \
+    | awk -F'|' -v h="$host" '
+        function key(x) { sub(/^[^@]*@/, "", x); sub(/:.*$/, "", x); x = tolower(x); sub(/\.local$/, "", x); return x }
+        {
+          n = split($3, tw, "\t")              # @tw-src = "<host>\t<session>"
+          if (n < 2 || tw[1] == "") next        # empty host = a LOCAL session
+          if (key(tw[1]) != key(h)) next
+          # Clear the fallback before exiting: `exit` still runs END, which
+          # would then print the detached hub as a second line.
+          if ($1 + 0 > 0) { print $2; detached = ""; exit }
+          if (detached == "") detached = $2
+        }
+        END { if (detached != "") print detached }'
+}
+
 # ---------------------------------------------------------------------------
 # One door to a remote box.
 #
