@@ -956,3 +956,26 @@ tool's output, either make it printable or own the locale — and if a lookup ke
 can come back subtly reshaped rather than empty, test the parser under the
 environment your daemon actually has, not the one your shell has. `env -i` is
 the test.*
+
+## 38. A pidfile in /tmp is not liveness — it gets purged, and "no pidfile" then reads as "dead"
+
+Reported as: *"ssh dema is sending 4x notifications."* dema wrote one line per
+event; the Mac's bridge supervisor had **four streamers per host** tailing it,
+spawned 2026-09-16, 09-20, 09-25 and 09-30 — all alive.
+
+The supervisor decided "is the streamer for this host running?" by reading
+`/tmp/cc-notify/bridge-<host>.pid` and `kill -0`ing it. Those files are written
+once at spawn and never touched again, and something purges stale files out of
+`/tmp` every few days — `bridge-supervisor.pid`, also written once, was gone too.
+After each purge the supervisor saw no pidfile, concluded the streamer was dead,
+and started another next to the live one. One more banner per event per purge,
+forever, with nothing in the log but a routine `spawned streamer for dema`.
+
+Fix (v1.9.3): the supervisor remembers its own children in memory (parallel
+host/pid arrays — launchd runs `/bin/bash` 3.2, so no `declare -A`). Pidfiles are
+still written, for `--stop` only. `tests/cc_remote_bridge_supervise_test.sh`
+runs the real `_supervise` with the purge simulated: the old code goes 2 → 4.
+
+*Rule: a process should get "is my child alive?" from its own memory, not from
+a file another process can delete. A file in `/tmp` can be cleaned away, and if
+missing state looks the same as "dead", every cleanup triggers a respawn.*
