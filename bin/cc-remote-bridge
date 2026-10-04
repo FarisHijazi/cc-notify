@@ -167,7 +167,7 @@ let d="";process.stdin.on("data",c=>d+=c).on("end",()=>{
       [ -n "$CC_TAB_ONLY" ] && return 0          # idle prompt / 🥱 → status only
       pkill -f "alerter.*cc-${E_sid} " 2>/dev/null   # one live worker per session
       _log "banner ${E_sid}: $name | $subtitle"
-      ( bash "$hooks/cc-notify-bg.sh" "${E_sid}" "$name" "$subtitle" "$body" "$sound" \
+      ( bash "$hooks/cc-notify-bg.sh" "${E_sid}" "$name" "$subtitle" "$body" "$sound" "$st" \
           </dev/null >>"$log" 2>&1 & )
       ;;
   esac
