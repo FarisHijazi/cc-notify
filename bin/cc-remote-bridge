@@ -214,7 +214,14 @@ _stream() {
 # Supervisor: keep exactly one streamer per discovered host.
 # ---------------------------------------------------------------------------
 _supervise() {
-  local host pidf pid
+  # Liveness lives in THIS process's memory, never in the pidfiles. /tmp/cc-notify
+  # gets purged every few days (bridge-supervisor.pid, written once, vanished too);
+  # a missing pidfile then read as "streamer dead", so a second streamer was
+  # spawned next to the live one — measured: four generations per host, four
+  # banners per event (LESSONS #38). Pidfiles are still written, for --stop only.
+  # Parallel arrays, not `declare -A`: launchd runs /bin/bash, which is 3.2.
+  local host pid i n
+  local -a kid_host=() kid_pid=()
   trap 'for c in $(pgrep -P $$ 2>/dev/null); do _kill_tree "$c"; done; rm -f "$state/bridge-supervisor.pid"; exit 0' TERM INT
   printf '%s' "$$" >"$state/bridge-supervisor.pid"
   _log "supervisor start (pid $$)"
@@ -225,11 +232,15 @@ _supervise() {
     fi
     while IFS= read -r host; do
       [ -n "$host" ] || continue
-      pidf="$state/bridge-$(_slug "$host").pid"
-      pid=$(cat "$pidf" 2>/dev/null)
+      n=${#kid_host[@]}
+      for (( i = 0; i < ${#kid_host[@]}; i++ )); do
+        [ "${kid_host[$i]}" = "$host" ] && { n=$i; break; }
+      done
+      pid=${kid_pid[$n]:-}
       if [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null; then continue; fi
       "$0" "$host" >/dev/null 2>&1 &
-      printf '%s' "$!" >"$pidf"
+      kid_host[$n]=$host; kid_pid[$n]=$!
+      printf '%s' "$!" >"$state/bridge-$(_slug "$host").pid"
       _log "supervisor: spawned streamer for $host (pid $!)"
     done <<<"$(_hosts)"
     sleep "$SCAN"
