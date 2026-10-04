@@ -367,6 +367,10 @@ touch ~/.claude/notify.suppress_when_focused # don't ping the window you're on
 rm ~/.claude/notify.suppress_when_focused    # always ping (default)
 ```
 
+**Do Not Disturb / Focus is respected**: banners stay quiet while it is on,
+except a 🚨 emergency, which always breaks through. To let every banner through
+DND as before: `touch ~/.claude/notify.ignore_dnd` (`rm` it to go back).
+
 **Permission** `Notification`s always fire a banner — those are the high-signal
 ones. The **idle** `Notification` (Claude Code's ~60s "waiting for your input")
 is **tab-status-only — no banner** (it updates the terminal tab to ❓ but doesn't

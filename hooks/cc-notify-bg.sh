@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Backgrounded worker spawned by cc-notify.sh.
-# Args: $1=session_id $2=title $3=subtitle $4=body $5=sound
+# Args: $1=session_id $2=title $3=subtitle $4=body $5=sound $6=status emoji
 # Runs alerter blocking, invokes cc-focus.sh on click.
 
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -43,6 +43,14 @@ logo="$script_dir/../assets/claude-logo.png"
 # dismissed. Override via CC_BANNER_TIMEOUT if you want a longer removal window.
 timeout="${CC_BANNER_TIMEOUT:-120}"
 
+# Do Not Disturb / Focus is respected — only a 🚨 emergency breaks through it
+# (the same token already auto-focuses the session). Opt back into "every banner
+# ignores DND" with ~/.claude/notify.ignore_dnd.
+dnd_args=()
+if [ "${6:-}" = "🚨" ] || [ -f "$HOME/.claude/notify.ignore_dnd" ]; then
+  dnd_args=(--ignore-dnd)
+fi
+
 # Dismiss-on-typing: if you start typing in the session the banner came from,
 # you've plainly seen it — clear it now instead of waiting for you to submit
 # (UserPromptSubmit) or click. Unsubmitted input isn't exposed by any hook, so
@@ -76,7 +84,7 @@ result=$("$alerter_bin" \
   --sound    "$5" \
   --group    "cc-$1" \
   --timeout  "$timeout" \
-  --ignore-dnd 2>/dev/null)
+  "${dnd_args[@]}" 2>/dev/null)
 
 # Banner is gone (clicked, dismissed, or timed out) — never leave the poller behind.
 [ -n "$watcher" ] && kill "$watcher" 2>/dev/null

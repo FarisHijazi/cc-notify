@@ -192,7 +192,7 @@ pkill -f "alerter.*cc-${session_id:-default} " 2>/dev/null
 # Spawn the bg worker (the BANNER) fully detached: the outer subshell exits
 # immediately, orphaning bg to launchd. No quote-nesting, no nohup needed.
 ( bash "$script_dir/cc-notify-bg.sh" \
-    "${session_id:-default}" "$title" "$subtitle" "$body" "$sound" \
+    "${session_id:-default}" "$title" "$subtitle" "$body" "$sound" "$status_emoji" \
     </dev/null >/dev/null 2>&1 & )
 
 exit 0
