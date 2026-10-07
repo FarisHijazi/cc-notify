@@ -197,6 +197,20 @@ cc_walk_tty() {  # walk a tty's process tree up to a GUI terminal; set CC_* on h
   return 1
 }
 
+# True when the caller sits under TWO OR MORE claude processes: a session that
+# another session started from its Bash tool (`claude -p` evals, subagent
+# scripts). It inherits the parent's TMUX_PANE, so CC_TMUX_TARGET names the
+# PARENT's pane — and typing into it from here once spammed `/color blue` into
+# a session on every one of its eval runs. A nested session owns no pane.
+cc_is_nested_claude() {
+  local _p=$$ _h=0 _n=0
+  while [ -n "$_p" ] && [ "$_p" != "1" ] && [ "$_h" -lt 30 ]; do
+    case "$(ps -o comm= -p "$_p" 2>/dev/null)" in claude|*/claude) _n=$((_n + 1)) ;; esac
+    _p=$(ps -o ppid= -p "$_p" 2>/dev/null | tr -d ' '); _h=$((_h + 1))
+  done
+  [ "$_n" -ge 2 ]
+}
+
 # Detect the GUI terminal/editor hosting this hook + collect candidate shell pids
 # for the editor extension to match. Walks from the CALLER's process, so any hook
 # can name the tab WITHOUT a route file — which is what makes `claude --resume`
