@@ -30,7 +30,7 @@
 # so a swallowed Enter was never actually retried. Both now verify against the
 # PANE (still_typed) whenever the box reads empty or unreadable, and only a box
 # holding genuinely DIFFERENT text still aborts — that one really is the user
-# typing. Cross-checked against auto-compact-continue.sh, which types into the
+# typing. Cross-checked against selfcompact.sh, which types into the
 # same pane and learned this first.
 #
 # Usage: cc-color-apply.sh <tmux-target> <color>
