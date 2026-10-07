@@ -3,7 +3,7 @@
 # input box". Not executable on its own; `source` it.
 #
 # Two independent hooks type into the SAME pane — cc-color-apply.sh sends
-# `/color <name>` on SessionStart and auto-compact-continue.sh sends `/compact`
+# `/color <name>` on SessionStart and selfcompact.sh sends `/compact`
 # or the continue message at a turn boundary — and PostCompact fires both at
 # once. With no lock they interleave inside each other's check-type-verify
 # dance and the box ends up holding

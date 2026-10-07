@@ -491,7 +491,7 @@ are holding, including the loop variable you are standing on.
 ## 26. Two hooks, one input box: the check-type-verify dance needs a LOCK
 
 `cc-color-apply.sh` types `/color <name>` on SessionStart and the out-of-repo
-`~/.claude/hooks/auto-compact-continue.sh` types `/compact` (or the continue
+`~/.claude/hooks/selfcompact.sh` types `/compact` (or the continue
 message) at a turn boundary — into the SAME pane. **PostCompact fires both at
 the same instant.** Each one is individually correct and fails closed, and that
 is exactly what makes the collision invisible: each checks the box is empty,
