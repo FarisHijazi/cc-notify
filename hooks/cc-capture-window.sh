@@ -121,7 +121,7 @@ if [ "$full" = 1 ]; then
   #                       (also done on Stop/Notification in cc-notify.sh).
   # Both detached; apply needs the session to be tmux-hosted.
   if [ "$event" = "SessionStart" ]; then
-    if [ -n "$CC_TMUX_TARGET" ]; then
+    if [ -n "$CC_TMUX_TARGET" ] && ! cc_is_nested_claude; then
       want=$(cc_color_settings "${cwd:-$PWD}")
       if [ -n "$want" ] && [ "$want" != "${CC_COLOR_NAME:-default}" ]; then
         ( bash "$script_dir/cc-color-apply.sh" "$CC_TMUX_TARGET" "$want" </dev/null >/dev/null 2>&1 & )
