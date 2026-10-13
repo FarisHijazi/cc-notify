@@ -241,6 +241,18 @@ CC_NO_TYPE_DISMISS=1   # turn it off
 CC_TYPE_POLL=2         # seconds between checks (default 1)
 ```
 
+It also clears when you **go to the session yourself** without touching the
+banner: click its pane (or its `tw` hub tile), or switch to it some other way.
+`bin/cc-pane-seen` watches for the pane going from *not in front of you* to *in
+front of you*, meaning the active pane of a tmux client whose terminal has focus. If the
+banner fires while you're already on that pane, you have to leave and come back.
+Remote sessions work too, through their local hub tile.
+
+```bash
+CC_NO_FOCUS_DISMISS=1  # turn it off
+CC_FOCUS_POLL=2        # seconds between checks (default 1)
+```
+
 The same helper is what lets a "type something into this session" automation
 know when to keep its hands off — it reports *empty* / *user is typing* / *no
 input box at all* (an AskUserQuestion menu or permission dialog), so nothing

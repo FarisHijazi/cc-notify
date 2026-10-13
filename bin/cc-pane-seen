@@ -1,0 +1,53 @@
+#!/usr/bin/env bash
+# cc-pane-seen — is a tmux pane in front of the user right now?
+#
+# "Seen" = the pane is the active pane of its session's current window AND a
+# client attached to that session has terminal focus (tmux's `focused` client
+# flag, fed by focus-events from Ghostty). A `tw` hub forwards focus into a
+# tile's nested client, so a LOCAL session shown in a hub tile reads as seen
+# exactly when that tile is the active one in a focused hub. A remote session's
+# route already points at the local hub pane, so it needs nothing extra.
+#
+#   cc-pane-seen <tmux-target>
+#       exit 0 = seen, 1 = not seen, 2 = target gone
+#
+#   cc-pane-seen --watch <tmux-target> [timeout_sec] [poll_sec]
+#       Blocks until the pane goes from NOT seen to seen — you went to it yourself
+#       (clicked its tile/pane, or switched to it). If it was already seen when the
+#       watch started, it must first leave view, so a banner that fires while you
+#       are on the pane isn't cleared by nothing happening.
+#       exit 0 = came into view, 1 = timed out, 2 = target gone
+set -uo pipefail
+
+# Detached callers (the banner worker) may not inherit a full PATH.
+command -v tmux >/dev/null 2>&1 || PATH="/opt/homebrew/bin:/usr/local/bin:$PATH"
+
+seen() {
+  local info sess
+  info=$(tmux display-message -p -t "$1" '#{session_name}	#{pane_active}#{window_active}' 2>/dev/null) || return 2
+  sess=${info%%	*}
+  [ -n "$sess" ] || return 2   # display-message prints blanks, not an error, for a gone pane
+  [ "${info#*	}" = 11 ] || return 1
+  tmux list-clients -t "$sess" -F '#{client_flags}' 2>/dev/null | grep -qw focused
+}
+
+if [ "${1:-}" = "--watch" ]; then
+  target="${2:-}"; timeout="${3:-120}"; poll="${4:-1}"
+  [ -n "$target" ] || { echo "usage: cc-pane-seen --watch <target> [timeout] [poll]" >&2; exit 2; }
+  seen "$target"; prev=$?
+  [ "$prev" = 2 ] && exit 2
+  waited=0
+  while [ "$waited" -lt "$timeout" ]; do
+    sleep "$poll"
+    waited=$(( waited + poll ))
+    seen "$target"; cur=$?
+    [ "$cur" = 2 ] && exit 2
+    [ "$prev" = 1 ] && [ "$cur" = 0 ] && exit 0
+    prev=$cur
+  done
+  exit 1
+fi
+
+target="${1:-}"
+[ -n "$target" ] || { echo "usage: cc-pane-seen <tmux-target> | --watch <target>" >&2; exit 2; }
+seen "$target"

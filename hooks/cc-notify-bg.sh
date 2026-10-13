@@ -51,28 +51,39 @@ if [ "${6:-}" = "🚨" ] || [ -f "$HOME/.claude/notify.ignore_dnd" ]; then
   dnd_args=(--ignore-dnd)
 fi
 
-# Dismiss-on-typing: if you start typing in the session the banner came from,
-# you've plainly seen it — clear it now instead of waiting for you to submit
-# (UserPromptSubmit) or click. Unsubmitted input isn't exposed by any hook, so
-# cc-prompt-state reads the input box off the tmux pane; it fires on the first
-# CHANGE from what was there when the banner appeared, so text you'd already
-# typed doesn't count. Only works for tmux-hosted sessions; everything else
-# keeps the reply/click paths. Off switch: CC_NO_TYPE_DISMISS=1.
-watcher=
-prompt_state="$script_dir/../bin/cc-prompt-state"
+# --remove works by telling the LIVE worker to self-close its delivered
+# notification (~50ms); pkill it too early and the removal aborts with the banner
+# still on screen. Same ordering as the click/reply paths (LESSONS #11).
+dismiss() {
+  "$alerter_bin" --remove "cc-$1" >/dev/null 2>&1
+  sleep 0.3
+  pkill -f "alerter.*cc-$1 " 2>/dev/null
+}
+
+# Two watchers clear the banner once you have plainly seen it, instead of waiting
+# for you to submit (UserPromptSubmit) or click it. Both read the route file's
+# tmux_target (the session's pane, or for a remote session the local hub pane),
+# so they only work for tmux-hosted sessions; everything else keeps the
+# reply/click paths.
+#  - Typing: no hook exposes unsubmitted input, so cc-prompt-state reads the input
+#    box off the pane and fires on the first CHANGE from what was there when the
+#    banner appeared (text you'd already typed doesn't count). Off: CC_NO_TYPE_DISMISS=1.
+#  - Going to it yourself: cc-pane-seen fires when the pane goes from not in front
+#    of you to in front of you (active pane of a focused tmux client) — you clicked
+#    its tile/pane or switched to it without touching the banner. Off: CC_NO_FOCUS_DISMISS=1.
+watchers=()
 tmux_target=$(sed -n 's/^tmux_target=//p' "/tmp/cc-notify/$1.route" 2>/dev/null | head -1)
-if [ -z "${CC_NO_TYPE_DISMISS:-}" ] && [ -n "$tmux_target" ] && [ -x "$prompt_state" ]; then
-  (
-    if "$prompt_state" --watch "$tmux_target" "$timeout" "${CC_TYPE_POLL:-1}"; then
-      # --remove works by telling the LIVE worker to self-close its delivered
-      # notification (~50ms); pkill it too early and the removal aborts with the
-      # banner still on screen. Same ordering as the click/reply paths (LESSONS #11).
-      "$alerter_bin" --remove "cc-$1" >/dev/null 2>&1
-      sleep 0.3
-      pkill -f "alerter.*cc-$1 " 2>/dev/null
-    fi
-  ) &
-  watcher=$!
+if [ -n "$tmux_target" ]; then
+  prompt_state="$script_dir/../bin/cc-prompt-state"
+  if [ -z "${CC_NO_TYPE_DISMISS:-}" ] && [ -x "$prompt_state" ]; then
+    ( "$prompt_state" --watch "$tmux_target" "$timeout" "${CC_TYPE_POLL:-1}" && dismiss "$1" ) &
+    watchers+=($!)
+  fi
+  pane_seen="$script_dir/../bin/cc-pane-seen"
+  if [ -z "${CC_NO_FOCUS_DISMISS:-}" ] && [ -x "$pane_seen" ]; then
+    ( "$pane_seen" --watch "$tmux_target" "$timeout" "${CC_FOCUS_POLL:-1}" && dismiss "$1" ) &
+    watchers+=($!)
+  fi
 fi
 
 result=$("$alerter_bin" \
@@ -86,8 +97,8 @@ result=$("$alerter_bin" \
   --timeout  "$timeout" \
   "${dnd_args[@]}" 2>/dev/null)
 
-# Banner is gone (clicked, dismissed, or timed out) — never leave the poller behind.
-[ -n "$watcher" ] && kill "$watcher" 2>/dev/null
+# Banner is gone (clicked, dismissed, or timed out) — never leave a poller behind.
+[ "${#watchers[@]}" -gt 0 ] && kill "${watchers[@]}" 2>/dev/null
 
 case "$result" in
   *CONTENTCLICKED*|*contentClicked*|*ACTIONCLICKED*|*actionClicked*)
