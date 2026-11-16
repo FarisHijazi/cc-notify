@@ -362,7 +362,7 @@ is only used to open a window if it is a plain tmux name.
 `Stop` fires the moment Claude is **fully done** — after every subagent has
 returned and the final response is written (background shells/watchers don't hold
 the turn open). cc-notify fires on it **immediately** rather than relying on Claude
-Code's ~60s idle Notification, so "done" pings are instant. Two opt-outs, both off
+Code's ~60s idle Notification, so "done" pings are instant. Three opt-outs, all off
 by default:
 
 1. **Global kill-switch**: while `~/.claude/notify.disable_stop` exists, Stop never fires.
@@ -370,6 +370,9 @@ by default:
    exists, Stop is skipped when the originating window is already frontmost. Off by
    default — the frontmost detection is unreliable in VS Code/Cursor and was eating
    legitimate pings.
+3. **Per session**: a session started with `CC_NOTIFY_OFF=1` in its env never fires a
+   Stop or Notification banner (local or via the remote bridge). Meant for always-on
+   bots and `/loop` workers; every other session keeps notifying.
 
 ```bash
 touch ~/.claude/notify.disable_stop          # silence Stop entirely

@@ -4,6 +4,9 @@
 # Reads hook event JSON on stdin. Backgrounds alerter and returns fast.
 
 event_kind="${1:-stop}"
+# Per-session off switch: a bot/loop session launched with CC_NOTIFY_OFF=1 never
+# banners (here or via the remote bridge). Other sessions are unaffected.
+[ "${CC_NOTIFY_OFF:-0}" = "1" ] && exit 0
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck disable=SC1091
 . "$script_dir/cc-lib.sh"
